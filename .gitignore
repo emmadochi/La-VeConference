@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Binaries / Large files
+*.exe
+*.zip
+*.tar.gz
+
+# Credentials & secrets
+firebase-adminsdk.json
+.env
+.env.*

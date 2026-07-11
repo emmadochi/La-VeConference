@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>La-Vie Conference App - WebRTC</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" type="text/css" href="https://npmcdn.com/flatpickr/dist/themes/dark.css">
+</head>
+<body>
+    <div class="container">
+        <!-- TOP NAVIGATION -->
+        <header class="top-nav">
+            <div class="logo">
+                <span class="material-symbols-outlined logo-icon">video_camera_front</span>
+                <span class="logo-text">La-Vie Conference</span>
+            </div>
+            
+            <div class="nav-controls">
+                <button id="themeToggleBtn" class="theme-toggle" title="Toggle Light/Dark Mode">
+                    <span class="material-symbols-outlined" id="themeIcon">light_mode</span>
+                </button>
+                <div class="auth-section" id="authSection">
+                    <button id="loginBtn" class="nav-btn">Log In</button>
+                    <button id="signupBtn" class="nav-btn primary">Sign Up</button>
+                </div>
+                <div class="user-section" id="userSection" style="display: none;">
+                    <span id="navUserName" class="user-name">User</span>
+                    <button id="logoutBtn" class="nav-btn">Log Out</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- JOIN SCREEN (LANDING) -->
+        <div class="landing-page" id="joinScreen">
+            <!-- Hero Section -->
+            <section class="hero-section">
+                <div class="hero-content">
+                    <div class="hero-badge">New: High Quality Audio Recording</div>
+                    <h1 class="hero-title">Premium Video Meetings.<br><span class="highlight">Free for Everyone.</span></h1>
+                    <p class="hero-subtitle">Connect, collaborate, and celebrate from anywhere with the most engaging platform ever built.</p>
+                    
+                    <div class="hero-actions">
+                        <div class="new-meeting-wrapper">
+                            <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
+                                <span class="material-symbols-outlined">video_call</span>
+                                New meeting
+                            </button>
+                            <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
+                                <button id="instantMeetingBtn" class="dropdown-item">
+                                    <span class="material-symbols-outlined">add</span> 
+                                    Start an instant meeting
+                                </button>
+                                <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
+                                    <span class="material-symbols-outlined">calendar_today</span> 
+                                    Schedule in database
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="input-group meet-input-group glass-input">
+                            <span class="material-symbols-outlined input-icon">keyboard</span>
+                            <input type="text" id="roomId" placeholder="Enter a code or link">
+                            <button id="joinBtn" class="text-btn" disabled>Join</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="hero-graphic">
+                    <!-- Glassmorphic Dashboard Card -->
+                    <div id="dashboardSection" class="dashboard-section glass-card" style="display: none;">
+                        <div class="dashboard-header">
+                            <h3>Upcoming Meetings</h3>
+                            <span class="material-symbols-outlined">event</span>
+                        </div>
+                        <div id="meetingList" class="meeting-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                    
+                    <!-- Glassmorphic QR Card -->
+                    <div class="qr-container glass-card" id="qrContainer">
+                        <p class="qr-title">Join via Mobile</p>
+                        <div class="qr-box">
+                            <img id="qrCodeImg" class="qr-image" src="" alt="QR Code to connect phone">
+                        </div>
+                        <p class="qr-url-text" id="qrUrlText"></p>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Features Section -->
+            <section class="features-section">
+                <h2 class="section-title">Why choose La-Vie Conference?</h2>
+                <div class="features-grid">
+                    <div class="feature-card glass-card">
+                        <div class="feature-icon"><span class="material-symbols-outlined">hd</span></div>
+                        <h3>Crystal Clear Quality</h3>
+                        <p>Enjoy HD video and studio-quality audio processing built right into your browser.</p>
+                    </div>
+                    <div class="feature-card glass-card">
+                        <div class="feature-icon"><span class="material-symbols-outlined">admin_panel_settings</span></div>
+                        <h3>Host Controls</h3>
+                        <p>Total control over your meetings with instant kick, mute, and secure admin powers.</p>
+                    </div>
+                    <div class="feature-card glass-card">
+                        <div class="feature-icon"><span class="material-symbols-outlined">devices</span></div>
+                        <h3>Works Anywhere</h3>
+                        <p>Fully responsive design that looks stunning on desktops, tablets, and mobile phones.</p>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- How It Works Section -->
+            <section class="how-it-works-section">
+                <h2 class="section-title">How it works</h2>
+                <div class="steps-container">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <h3>Sign Up</h3>
+                        <p>Create a free account to unlock admin features and scheduling.</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <h3>Create a Room</h3>
+                        <p>Click "New Meeting" to generate a secure, private room.</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <h3>Share Link</h3>
+                        <p>Send the link or QR code to anyone to join instantly.</p>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Footer -->
+            <footer class="landing-footer">
+                <div class="footer-content">
+                    <div class="footer-logo">
+                        <span class="material-symbols-outlined logo-icon">video_camera_front</span>
+                        <span class="logo-text">La-Vie Conference</span>
+                    </div>
+                    <p>&copy; 2026 La-Vie Conference App. All rights reserved.</p>
+                </div>
+            </footer>
+        </div>
+        
+        <!-- MODALS -->
+        <!-- Auth Modal -->
+        <div id="authModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <button class="close-modal">&times;</button>
+                <h2 id="modalTitle">Log In</h2>
+                <input type="email" id="authEmail" class="modal-input" placeholder="Email">
+                <input type="password" id="authPassword" class="modal-input" placeholder="Password">
+                <button id="authSubmitBtn" class="primary-btn full-width">Submit</button>
+                <div class="auth-divider" style="text-align: center; margin: 15px 0; color: var(--text-muted); font-size: 0.9rem;">OR</div>
+                <button id="googleAuthBtn" class="secondary-btn full-width" style="display: flex; align-items: center; justify-content: center; gap: 10px; background: white; color: black; border: 1px solid #ccc; font-weight: 500;">
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width: 18px; height: 18px;">
+                    Continue with Google
+                </button>
+                <p id="authError" class="error-text"></p>
+                <p class="switch-auth">Don't have an account? <a href="#" id="switchAuthMode">Sign up</a></p>
+            </div>
+        </div>
+
+        <!-- Pre-Join Name Modal (For guests or missing names) -->
+        <div id="preJoinModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <button class="close-modal">&times;</button>
+                <h2>What's your name?</h2>
+                <p class="modal-desc">Others in the call will see this name.</p>
+                <input type="text" id="userName" class="modal-input" placeholder="Your Name" value="Anonymous">
+                <button id="preJoinSubmitBtn" class="primary-btn full-width">Join Call</button>
+            </div>
+        </div>
+
+        <!-- Schedule Modal -->
+        <div id="scheduleModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <button class="close-modal">&times;</button>
+                <h2>Schedule a Meeting</h2>
+                <input type="text" id="scheduleTitle" class="modal-input" placeholder="Meeting Title (e.g. Weekly Sync)">
+                <input type="datetime-local" id="scheduleTime" class="modal-input">
+                <button id="scheduleSubmitBtn" class="primary-btn full-width">Save to Dashboard</button>
+                <p id="scheduleMsg" class="success-text"></p>
+            </div>
+        </div>
+
+        <!-- Effects Modal -->
+        <div id="effectsModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content effects-content">
+                <button class="close-modal" id="closeEffectsBtn">&times;</button>
+                <h2>Video Effects</h2>
+                <div class="effects-grid" id="effectsGrid">
+                    <div class="effect-option active" data-effect="none">
+                        <div class="effect-preview none-preview">
+                            <span class="material-symbols-outlined">block</span>
+                        </div>
+                        <p>None</p>
+                    </div>
+                    <div class="effect-option" data-effect="blur">
+                        <div class="effect-preview blur-preview">
+                            <span class="material-symbols-outlined">blur_on</span>
+                        </div>
+                        <p>Blur</p>
+                    </div>
+                    <div class="effect-option" data-effect="bg_office">
+                        <img src="/static/assets/bg_office.png" alt="Office">
+                        <p>Office</p>
+                    </div>
+                    <div class="effect-option" data-effect="bg_abstract">
+                        <img src="/static/assets/bg_abstract.png" alt="Abstract">
+                        <p>Abstract</p>
+                    </div>
+                    <div class="effect-option" data-effect="bg_nature">
+                        <img src="/static/assets/bg_nature.png" alt="Nature">
+                        <p>Nature</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- IN-CALL APP LAYOUT -->
+        <div class="app-layout" id="appLayout" style="display: none;">
+            <div class="meeting-info-top" id="meetingInfo">
+                <!-- Code injected here -->
+            </div>
+            
+            <div class="main-column" id="mainColumn">
+                <div class="whiteboard-container" id="whiteboardContainer">
+                    <!-- Iframe injected via JS -->
+                </div>
+                <div class="video-grid" id="videoGrid">
+                    <div class="video-wrapper local" id="wrapper-local-camera">
+                        <video id="localVideo" autoplay muted playsinline></video>
+                        <span class="label" id="localLabel">You</span>
+                        <button class="pin-overlay-btn" title="Spotlight Video">
+                            <span class="material-symbols-outlined">push_pin</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="media-controls" id="mediaControls" style="display: none;">
+                    <button id="toggleMicBtn" class="control-btn active">
+                        <span class="material-symbols-outlined">mic</span>
+                        <span class="btn-text">Mute</span>
+                    </button>
+                    <button id="toggleVideoBtn" class="control-btn active">
+                        <span class="material-symbols-outlined">videocam</span>
+                        <span class="btn-text">Hide</span>
+                    </button>
+                    <button id="flipCameraBtn" class="control-btn flip-cam-btn" title="Flip Camera">
+                        <span class="material-symbols-outlined">flip_camera_ios</span>
+                        <span class="btn-text">Flip</span>
+                    </button>
+                    <button id="toggleChatBtn" class="control-btn" title="Chat">
+                        <span class="material-symbols-outlined">chat</span>
+                        <span class="btn-text">Chat</span>
+                        <div class="chat-badge" id="chatBadge"></div>
+                    </button>
+                    <button id="togglePeopleBtn" class="control-btn" title="Participants">
+                        <span class="material-symbols-outlined">group</span>
+                        <span class="btn-text">People</span>
+                    </button>
+                    
+                    <div class="react-wrapper" style="position: relative;">
+                        <button id="toggleReactBtn" class="control-btn" title="React">
+                            <span class="material-symbols-outlined">add_reaction</span>
+                            <span class="btn-text">React</span>
+                        </button>
+                        <div class="emoji-popover" id="emojiPopover" style="display: none;">
+                            <button class="emoji-btn">👍</button>
+                            <button class="emoji-btn">❤️</button>
+                            <button class="emoji-btn">😂</button>
+                            <button class="emoji-btn">😮</button>
+                            <button class="emoji-btn">👏</button>
+                            <button class="emoji-btn">🎉</button>
+                        </div>
+                    </div>
+                    
+                    <button id="toggleHandBtn" class="control-btn" title="Raise Hand">
+                        <span class="material-symbols-outlined">front_hand</span>
+                        <span class="btn-text">Hand</span>
+                    </button>
+
+                    <button id="toggleWhiteboardBtn" class="control-btn" title="Whiteboard">
+                        <span class="material-symbols-outlined">draw</span>
+                        <span class="btn-text">Board</span>
+                    </button>
+
+                    <button id="togglePollsBtn" class="control-btn" title="Polls & Q&amp;A">
+                        <span class="material-symbols-outlined">poll</span>
+                        <span class="btn-text">Polls</span>
+                        <div class="chat-badge" id="qaBadge" style="display:none;"></div>
+                    </button>
+
+                    <button id="toggleRecordBtn" class="control-btn" title="Record Audio" style="display: none;">
+                        <span class="material-symbols-outlined">radio_button_checked</span>
+                        <span class="btn-text">Record</span>
+                    </button>
+                    <button id="toggleEffectsBtn" class="control-btn" title="Video Effects">
+                        <span class="material-symbols-outlined">auto_awesome</span>
+                        <span class="btn-text">Effects</span>
+                    </button>
+                    <button id="toggleNoiseBtn" class="control-btn" title="AI Noise Cancellation">
+                        <span class="material-symbols-outlined">noise_control_off</span>
+                        <span class="btn-text">Krisp</span>
+                    </button>
+                    <button id="toggleScreenBtn" class="control-btn" title="Share Screen">
+                        <span class="material-symbols-outlined">present_to_all</span>
+                        <span class="btn-text">Share</span>
+                    </button>
+                    <button id="leaveCallBtn" class="control-btn leave-btn">
+                        <span class="material-symbols-outlined">call_end</span>
+                        <span class="btn-text">Leave</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="chat-sidebar">
+                <div class="chat-header">
+                    <h3>In-call messages</h3>
+                    <button id="closeChatBtn" class="close-chat-btn" title="Minimize Chat">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-system">Messages can only be seen by people in the call and are deleted when the call ends.</div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="Send a message..." disabled>
+                    <button id="sendBtn" disabled><span class="material-symbols-outlined">send</span></button>
+                </div>
+            </div>
+
+            <!-- Participants Sidebar -->
+            <div class="chat-sidebar people-sidebar" id="peopleSidebar">
+                <div class="chat-header">
+                    <h3>Participants</h3>
+                    <button class="close-chat-btn" id="closePeopleBtn"><span class="material-symbols-outlined">close</span></button>
+                </div>
+                <div class="chat-messages" id="peopleList" style="gap: 8px;">
+                    <!-- Participants list goes here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Polls & Q&A Sidebar -->
+    <div id="pollQaSidebar" class="poll-qa-sidebar">
+        <div class="poll-qa-header">
+            <div class="poll-qa-tabs">
+                <button class="pq-tab active" data-tab="polls" id="tabPolls">📊 Polls</button>
+                <button class="pq-tab" data-tab="qa" id="tabQA">❓ Q&amp;A</button>
+            </div>
+            <button id="closePollQaBtn" class="close-chat-btn" title="Close">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+        </div>
+
+        <!-- Polls Tab -->
+        <div class="pq-tab-content" id="tabContentPolls">
+            <!-- Host: Create Poll -->
+            <div class="poll-create-section" id="pollCreateSection" style="display:none;">
+                <h4 class="poll-section-title">Create a Poll</h4>
+                <input type="text" id="pollQuestionInput" class="modal-input" placeholder="Ask a question..." maxlength="200">
+                <div id="pollOptionsContainer">
+                    <input type="text" class="modal-input poll-option-input" placeholder="Option 1">
+                    <input type="text" class="modal-input poll-option-input" placeholder="Option 2">
+                </div>
+                <button id="addPollOptionBtn" class="pq-secondary-btn">+ Add Option</button>
+                <button id="launchPollBtn" class="pq-primary-btn">Launch Poll</button>
+            </div>
+
+            <!-- Active Poll View -->
+            <div id="pollActiveSection" style="display:none;">
+                <div class="poll-active-header">
+                    <p class="poll-question-display" id="activePollQuestion"></p>
+                    <button id="endPollBtn" class="pq-danger-btn host-only" style="display:none;">End Poll</button>
+                </div>
+                <div id="pollOptionsDisplay"></div>
+                <div id="pollResultsBar"></div>
+            </div>
+
+            <!-- Empty state -->
+            <div id="pollEmptyState" class="pq-empty-state">
+                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">poll</span>
+                <p>No active poll.</p>
+                <small>The host can launch a poll for everyone.</small>
+            </div>
+        </div>
+
+        <!-- Q&A Tab -->
+        <div class="pq-tab-content" id="tabContentQA" style="display:none;">
+            <div class="qa-questions-list" id="qaQuestionsList">
+                <div class="pq-empty-state" id="qaEmptyState">
+                    <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">chat_bubble_outline</span>
+                    <p>No questions yet.</p>
+                    <small>Be the first to ask!</small>
+                </div>
+            </div>
+            <div class="qa-input-area">
+                <input type="text" id="qaQuestionInput" class="modal-input" placeholder="Ask the host a question..." maxlength="300">
+                <button id="submitQaBtn" class="pq-primary-btn">Submit</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script type="module" src="/static/firebase-config.js"></script>
+    <script type="module" src="/static/auth.js"></script>
+    <script type="module" src="/static/dashboard.js"></script>
+    <script type="module" src="/static/app.js"></script>
+</body>
+</html>

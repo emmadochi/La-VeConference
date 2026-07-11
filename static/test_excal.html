@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Excalidraw Test</title>
+    <style>
+        body { margin: 0; padding: 0; }
+        #root { height: 100vh; width: 100vw; }
+    </style>
+    <!-- Import Maps to resolve React dependencies -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "@excalidraw/excalidraw": "https://esm.sh/@excalidraw/excalidraw@0.17.6"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module">
+        import React from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Excalidraw } from '@excalidraw/excalidraw';
+
+        const App = () => {
+            return React.createElement(Excalidraw);
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
