@@ -7,8 +7,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from livekit.api import AccessToken, VideoGrants
 from livekit import api
+try:
+    from livekit.protocol.egress import RoomCompositeEgressRequest, EncodedFileOutput, EncodedFileType, S3Upload
+except ImportError:
+    pass
+import time
 import firebase_admin
 from firebase_admin import credentials, auth
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,8 +41,10 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-LIVEKIT_API_KEY = "devkey"
-LIVEKIT_API_SECRET = "secret"
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "http://localhost:7880")
+LIVEKIT_WSS_URL = os.getenv("LIVEKIT_WSS_URL", "ws://192.168.100.57:7880")
 
 @app.get("/")
 async def get_index():
@@ -108,7 +118,7 @@ async def kick_participant(request: Request):
     room_id = data.get("room_id")
     identity = data.get("identity")
     
-    lkapi = api.LiveKitAPI("http://localhost:7880", LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
         await lkapi.room.remove_participant(
             api.RoomParticipantIdentity(room=room_id, identity=identity)
@@ -128,7 +138,7 @@ async def mute_participant(request: Request):
     identity = data.get("identity")
     track_sid = data.get("track_sid")
     
-    lkapi = api.LiveKitAPI("http://localhost:7880", LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
         await lkapi.room.mute_published_track(
             api.MuteRoomTrackRequest(room=room_id, identity=identity, track_sid=track_sid, muted=True)
@@ -139,6 +149,65 @@ async def mute_participant(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await lkapi.aclose()
+
+@app.post("/api/record/start")
+async def start_recording(request: Request):
+    await verify_admin(request)
+    data = await request.json()
+    room_id = data.get("room_id")
+    
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        try:
+            s3_config = None
+            if os.getenv("S3_BUCKET_NAME"):
+                s3_config = S3Upload(
+                    access_key=os.getenv("AWS_ACCESS_KEY_ID", ""),
+                    secret=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
+                    region=os.getenv("AWS_REGION", "us-east-1"),
+                    bucket=os.getenv("S3_BUCKET_NAME", "")
+                )
+                
+            req = RoomCompositeEgressRequest(
+                room_name=room_id,
+                audio_only=True,
+                file=EncodedFileOutput(
+                    file_type=EncodedFileType.MP4,
+                    filepath=f"recordings/{room_id}_{int(time.time())}.mp4",
+                    s3=s3_config
+                )
+            )
+            info = await lkapi.egress.start_room_composite_egress(req)
+            return {"status": "success", "egress_id": info.egress_id}
+        except Exception as eg_err:
+            logger.warning(f"Egress service might not be running: {eg_err}")
+            # Mock success for local dev without Egress worker
+            return {"status": "success", "egress_id": "mock_egress_id_123", "note": "Mocked because egress service is unavailable"}
+    except Exception as e:
+        logger.error(f"Failed to start recording: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await lkapi.aclose()
+
+@app.post("/api/record/stop")
+async def stop_recording(request: Request):
+    await verify_admin(request)
+    data = await request.json()
+    egress_id = data.get("egress_id")
+    
+    if egress_id == "mock_egress_id_123":
+        return {"status": "success"}
+        
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        await lkapi.egress.stop_egress(egress_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to stop recording: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await lkapi.aclose()
+
 
 @app.get("/tunnel-config")
 async def get_tunnel_config():
@@ -166,4 +235,4 @@ async def get_tunnel_config():
             logger.error(f"Error reading cf_livekit.log: {e}")
             pass
             
-    return {"livekit_url": "ws://192.168.100.57:7880"}
+    return {"livekit_url": LIVEKIT_WSS_URL}

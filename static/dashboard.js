@@ -30,15 +30,9 @@ window.addEventListener('authStateChanged', (e) => {
     }
 });
 
-// Generate random room code: xxx-xxxx-xxx
+// Generate random room code: la-vie-[numbers]
 function generateRoomCode() {
-    const chars = 'abcdefghijklmnopqrstuvwxyz';
-    let code = '';
-    for(let i = 0; i < 10; i++) {
-        if(i === 3 || i === 7) code += '-';
-        else code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
+    return 'la-vie-' + Date.now().toString().substring(7);
 }
 
 // Format date
