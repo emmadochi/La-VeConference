@@ -3,3 +3,4 @@ uvicorn
 livekit-api
 python-dotenv
 firebase-admin
+apscheduler

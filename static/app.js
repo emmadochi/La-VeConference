@@ -3,7 +3,7 @@ import { BackgroundProcessor, supportsBackgroundProcessors } from "https://esm.s
 import { KrispNoiseFilter } from "https://esm.sh/@livekit/krisp-noise-filter@0.1.3";
 import * as LivekitClient from "https://esm.sh/livekit-client@2.20.1";
 
-const { Room, RoomEvent, Track, DataPacket_Kind, VideoQuality } = LivekitClient;
+const { Room, RoomEvent, Track, DataPacket_Kind, VideoQuality, ExternalE2EEKeyProvider } = LivekitClient;
 
 // ==========================================
 // PHASE A: PERFORMANCE CONSTANTS
@@ -279,10 +279,22 @@ async function startCall(roomId) {
             };
         }
 
+        const e2eeKey = window.location.hash.substring(1) || localStorage.getItem(`e2ee_${roomId}`);
+        let e2eeOptions = undefined;
+        if (e2eeKey) {
+            const keyProvider = new ExternalE2EEKeyProvider();
+            keyProvider.setKey(e2eeKey);
+            e2eeOptions = {
+                keyProvider,
+                workerUrl: '/static/e2ee-worker.js'
+            };
+        }
+
         currentRoom = new Room({
             adaptiveStream: true,
             dynacast: true,
-            videoCaptureDefaults: { facingMode: currentFacingMode }
+            videoCaptureDefaults: { facingMode: currentFacingMode },
+            e2ee: e2eeOptions
         });
 
         // ======================================
@@ -1266,7 +1278,7 @@ if (toggleHandBtn) {
     toggleHandBtn.addEventListener('click', () => {
         if (!currentRoom || currentRoom.state !== 'connected') return;
         isHandRaised = !isHandRaised;
-        toggleHandBtn.classList.toggle('hand-raised', isHandRaised);
+        toggleHandBtn.classList.toggle('active', isHandRaised);
         const payload = JSON.stringify({ type: 'raise_hand', state: isHandRaised, senderId: currentRoom.localParticipant.identity });
         const data = new TextEncoder().encode(payload);
         currentRoom.localParticipant.publishData(data, { reliable: true });

@@ -12,8 +12,13 @@ try:
 except ImportError:
     pass
 import time
+from datetime import datetime, timezone, timedelta
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import firebase_admin
-from firebase_admin import credentials, auth
+from firebase_admin import credentials, auth, firestore, messaging
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,6 +50,13 @@ LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "http://localhost:7880")
 LIVEKIT_WSS_URL = os.getenv("LIVEKIT_WSS_URL", "ws://192.168.100.57:7880")
+
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER", "noreply@la-vie.lifechangerstouch.org")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+db = firestore.client() if firebase_admin._apps else None
 
 @app.get("/")
 async def get_index():
@@ -236,3 +248,110 @@ async def get_tunnel_config():
             pass
             
     return {"livekit_url": LIVEKIT_WSS_URL}
+
+
+# ==========================================
+# BACKGROUND SCHEDULER: NOTIFICATIONS
+# ==========================================
+def send_email_reminder(to_email: str, title: str, room_id: str, scheduled_time: datetime):
+    if not SMTP_PASSWORD:
+        logger.warning(f"SMTP_PASSWORD not set. Cannot send email to {to_email}")
+        return
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = to_email
+        msg['Subject'] = f"Reminder: {title} is starting soon!"
+        
+        body = f"""
+        Hello!
+        
+        This is a reminder that your meeting "{title}" is starting in less than 10 minutes (at {scheduled_time.strftime('%I:%M %p UTC')}).
+        
+        Join here: https://la-vie.lifechangerstouch.org/?room={room_id}
+        
+        See you there!
+        La-Vie Conference
+        """
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Sent reminder email to {to_email}")
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {e}")
+
+async def check_upcoming_meetings():
+    if not db:
+        return
+    
+    logger.info("Checking for upcoming meetings...")
+    try:
+        now = datetime.now(timezone.utc)
+        ten_mins_from_now = now + timedelta(minutes=10)
+        
+        # Query meetings where notified == false
+        meetings_ref = db.collection('meetings').where('notified', '==', False).stream()
+        
+        for meeting in meetings_ref:
+            data = meeting.to_dict()
+            doc_id = meeting.id
+            scheduled_str = data.get('scheduledTime')
+            
+            if not scheduled_str:
+                continue
+                
+            try:
+                # Parse ISO string (e.g., "2026-07-20T21:40:00.000Z")
+                sched_time = datetime.fromisoformat(scheduled_str.replace('Z', '+00:00'))
+                
+                # If meeting is within the next 10 minutes
+                if now <= sched_time <= ten_mins_from_now:
+                    title = data.get('title', 'Meeting')
+                    room_id = data.get('roomId', '')
+                    host_id = data.get('hostId', '')
+                    attendees = data.get('attendeeEmails', [])
+                    
+                    # 1. Send FCM Push Notification to host (and attendees if we had their FCM tokens, but we only have hostId)
+                    if host_id:
+                        host_doc = db.collection('users').document(host_id).get()
+                        if host_doc.exists:
+                            fcm_token = host_doc.to_dict().get('fcmToken')
+                            if fcm_token:
+                                message = messaging.Message(
+                                    notification=messaging.Notification(
+                                        title='Meeting Starting Soon',
+                                        body=f'Your meeting "{title}" starts in 10 minutes.'
+                                    ),
+                                    data={'roomId': room_id},
+                                    token=fcm_token,
+                                )
+                                try:
+                                    response = messaging.send(message)
+                                    logger.info(f"Successfully sent push to host {host_id}: {response}")
+                                except Exception as e:
+                                    logger.error(f"Error sending push to {host_id}: {e}")
+                    
+                    # 2. Send Emails to attendees
+                    for email in attendees:
+                        send_email_reminder(email, title, room_id, sched_time)
+                        
+                    # Mark as notified
+                    db.collection('meetings').document(doc_id).update({'notified': True})
+                    
+            except Exception as e:
+                logger.error(f"Error processing meeting {doc_id}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error checking upcoming meetings: {e}")
+
+scheduler = AsyncIOScheduler()
+scheduler.add_job(check_upcoming_meetings, 'interval', minutes=1)
+
+@app.on_event("startup")
+async def startup_event():
+    scheduler.start()
+    logger.info("APScheduler started.")

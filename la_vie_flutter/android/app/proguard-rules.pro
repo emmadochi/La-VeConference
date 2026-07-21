@@ -24,3 +24,7 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# Fix R8 Play Core splitcompat missing classes error
+-keep class com.google.android.play.core.** { *; }
+-dontwarn com.google.android.play.core.**

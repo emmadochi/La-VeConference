@@ -3,6 +3,7 @@ import { db, fbFunctions } from "./firebase-config.js";
 const scheduleModal = document.getElementById("scheduleModal");
 const scheduleTitle = document.getElementById("scheduleTitle");
 const scheduleTime = document.getElementById("scheduleTime");
+const scheduleAttendees = document.getElementById("scheduleAttendees");
 const scheduleSubmitBtn = document.getElementById("scheduleSubmitBtn");
 const scheduleMsg = document.getElementById("scheduleMsg");
 const meetingList = document.getElementById("meetingList");
@@ -86,6 +87,7 @@ scheduleSubmitBtn.addEventListener("click", async () => {
     
     const title = scheduleTitle.value.trim();
     const time = scheduleTime.value;
+    const attendeesRaw = scheduleAttendees ? scheduleAttendees.value.trim() : "";
     
     if (!title || !time) {
         scheduleMsg.style.color = "#ef4444";
@@ -93,17 +95,27 @@ scheduleSubmitBtn.addEventListener("click", async () => {
         return;
     }
 
+    const attendeeEmails = attendeesRaw.split(',')
+        .map(email => email.trim())
+        .filter(email => email.length > 0);
+
     scheduleSubmitBtn.disabled = true;
     scheduleSubmitBtn.textContent = "Saving...";
     scheduleMsg.textContent = "";
 
     try {
         const roomId = generateRoomCode();
+        // Convert the flatpickr local time string to a full ISO string (UTC)
+        const scheduledDateObj = new Date(time);
+        const scheduledTimeIso = scheduledDateObj.toISOString();
+
         await fbFunctions.addDoc(fbFunctions.collection(db, "meetings"), {
             hostId: currentUser.uid,
             title: title,
-            scheduledTime: time,
+            scheduledTime: scheduledTimeIso,
             roomId: roomId,
+            attendeeEmails: attendeeEmails,
+            notified: false,
             createdAt: new Date().toISOString()
         });
         
@@ -115,6 +127,7 @@ scheduleSubmitBtn.addEventListener("click", async () => {
             scheduleModal.style.display = "none";
             scheduleTitle.value = "";
             scheduleTime.value = "";
+            if (scheduleAttendees) scheduleAttendees.value = "";
             scheduleMsg.textContent = "";
             fetchMeetings();
         }, 2000);

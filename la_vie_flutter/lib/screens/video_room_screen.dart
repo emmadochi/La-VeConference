@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:flutter_background/flutter_background.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 
 class ChatMessage {
@@ -56,6 +57,9 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   bool _isChatOpen = false;
   final TextEditingController _chatController = TextEditingController();
 
+  Set<String> _raisedHands = {};
+  Map<String, String> _activeReactions = {};
+
   @override
   void initState() {
     super.initState();
@@ -66,8 +70,26 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
 
   Future<void> _connectToRoom() async {
     try {
-      final token = await ApiService.getToken(widget.roomName, widget.participantName);
+      String actualRoomId = widget.roomName;
+      String? e2eeKey;
+
+      if (actualRoomId.contains('#')) {
+        final parts = actualRoomId.split('#');
+        actualRoomId = parts[0];
+        e2eeKey = parts[1];
+      } else {
+        final prefs = await SharedPreferences.getInstance();
+        e2eeKey = prefs.getString('e2ee_$actualRoomId');
+      }
+
+      final token = await ApiService.getToken(actualRoomId, widget.participantName);
       final livekitUrl = await ApiService.getLiveKitUrl();
+      
+      BaseKeyProvider? keyProvider;
+      if (e2eeKey != null) {
+        keyProvider = await BaseKeyProvider.create();
+        await keyProvider.setKey(e2eeKey);
+      }
       
       _room = Room();
       _listener = _room.createListener();
@@ -125,6 +147,47 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             return;
           }
 
+          try {
+            final data = jsonDecode(decoded);
+            if (data is Map<String, dynamic>) {
+              if (data['type'] == 'reaction') {
+                _showReaction(data['senderId'] ?? event.participant?.identity, data['emoji']);
+                return;
+              } else if (data['type'] == 'raise_hand') {
+                final senderId = data['senderId'] ?? event.participant?.identity;
+                if (senderId != null) {
+                  if (mounted) {
+                    setState(() {
+                      if (data['state'] == true) {
+                        _raisedHands.add(senderId);
+                      } else {
+                        _raisedHands.remove(senderId);
+                      }
+                    });
+                  }
+                }
+                return;
+              } else if (data['type'] == 'chat') {
+                final newMsg = ChatMessage(
+                  sender: data['sender'] ?? event.participant?.name ?? 'Someone',
+                  message: data['text'] ?? '',
+                  timestamp: DateTime.now(),
+                );
+                _messagesNotifier.value = List.from(_messagesNotifier.value)..add(newMsg);
+                if (mounted) {
+                  setState(() {
+                    if (!_isChatOpen) {
+                      _unreadCount++;
+                    }
+                  });
+                }
+                return;
+              }
+            }
+          } catch (_) {
+            // Ignore JSON parse errors, treat as legacy chat
+          }
+
           final newMsg = ChatMessage(
             sender: event.participant?.name ?? 'Someone',
             message: decoded,
@@ -149,9 +212,10 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
       await _room.connect(
         livekitUrl,
         token,
-        roomOptions: const RoomOptions(
+        roomOptions: RoomOptions(
           adaptiveStream: true,
           dynacast: true,
+          e2eeOptions: keyProvider != null ? E2EEOptions(keyProvider: keyProvider) : null,
         ),
         connectOptions: const ConnectOptions(
           timeouts: Timeouts(
@@ -191,6 +255,51 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     _room.disconnect().catchError((_) {});
     _room.dispose();
     super.dispose();
+  }
+
+  void _sendReaction(String emoji) async {
+    final identity = _room.localParticipant?.identity;
+    final payload = jsonEncode({'type': 'reaction', 'emoji': emoji, 'senderId': identity});
+    try {
+      await _room.localParticipant?.publishData(utf8.encode(payload), reliable: true);
+      _showReaction(identity, emoji);
+    } catch (_) {}
+  }
+
+  void _toggleHandRaise() async {
+    final identity = _room.localParticipant?.identity;
+    if (identity == null) return;
+    
+    final isRaised = !_raisedHands.contains(identity);
+    setState(() {
+      if (isRaised) {
+        _raisedHands.add(identity);
+      } else {
+        _raisedHands.remove(identity);
+      }
+    });
+
+    final payload = jsonEncode({'type': 'raise_hand', 'state': isRaised, 'senderId': identity});
+    try {
+      await _room.localParticipant?.publishData(utf8.encode(payload), reliable: true);
+    } catch (_) {}
+  }
+
+  void _showReaction(String? identity, String emoji) {
+    if (identity == null) return;
+    if (!mounted) return;
+    setState(() {
+      _activeReactions[identity] = emoji;
+    });
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          if (_activeReactions[identity] == emoji) {
+            _activeReactions.remove(identity);
+          }
+        });
+      }
+    });
   }
 
   void _muteAll() async {
@@ -393,6 +502,45 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         }
       }
     }
+  }
+
+  void _showReactionsBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return ClipRRect(
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF070B19).withOpacity(0.8),
+                border: Border(top: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3))),
+              ),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 30,
+                runSpacing: 20,
+                children: ['👍', '❤️', '😂', '😮', '👏', '🎉'].map((emoji) {
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(context);
+                      _sendReaction(emoji);
+                    },
+                    child: Text(emoji, style: const TextStyle(fontSize: 40)),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showMoreOptions() {
@@ -973,6 +1121,38 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                                 ),
                               ),
                             ),
+                            // Hand Raise Button
+                            GestureDetector(
+                              onTap: _toggleHandRaise,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  boxShadow: _raisedHands.contains(_room.localParticipant?.identity) ? [
+                                    BoxShadow(
+                                      color: const Color(0xFF00E5FF).withOpacity(0.15),
+                                      blurRadius: 4,
+                                      spreadRadius: 0,
+                                    )
+                                  ] : [],
+                                ),
+                                child: Icon(
+                                  _raisedHands.contains(_room.localParticipant?.identity) ? Icons.front_hand : Icons.front_hand_outlined,
+                                  color: _raisedHands.contains(_room.localParticipant?.identity) ? const Color(0xFF00E5FF) : Colors.white54,
+                                  size: 26,
+                                ),
+                              ),
+                            ),
+                            // Reactions Button
+                            GestureDetector(
+                              onTap: _showReactionsBottomSheet,
+                              child: Container(
+                                decoration: const BoxDecoration(),
+                                child: const Icon(
+                                  Icons.add_reaction_outlined,
+                                  color: Color(0xFF00E5FF),
+                                  size: 26,
+                                ),
+                              ),
+                            ),
                             // More Options Button
                             GestureDetector(
                               onTap: _showMoreOptions,
@@ -1152,6 +1332,48 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                 ],
               ),
             ),
+            if (_raisedHands.contains(p.identity))
+              Positioned(
+                top: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.amber,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4, offset: const Offset(0, 2)),
+                    ],
+                  ),
+                  child: const Icon(Icons.front_hand, color: Colors.white, size: 20),
+                ),
+              ),
+            if (_activeReactions.containsKey(p.identity))
+              Positioned(
+                bottom: 20,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    duration: const Duration(milliseconds: 1000),
+                    builder: (context, value, child) {
+                      return Transform.translate(
+                        offset: Offset(0, -100 * value), // Float up
+                        child: Opacity(
+                          opacity: 1.0 - value, // Fade out
+                          child: Text(
+                            _activeReactions[p.identity]!,
+                            style: const TextStyle(fontSize: 48, shadows: [
+                              Shadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))
+                            ]),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
           ],
         ),
       ),
