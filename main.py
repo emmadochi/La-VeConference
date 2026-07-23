@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from livekit.api import AccessToken, VideoGrants
+from livekit.api import AccessToken, VideoGrants, WebhookReceiver
 from livekit import api
 try:
     from livekit.protocol.egress import RoomCompositeEgressRequest, EncodedFileOutput, EncodedFileType, S3Upload
@@ -68,6 +68,32 @@ async def favicon():
     from fastapi.responses import Response
     return Response(status_code=204)
 
+@app.get("/.well-known/assetlinks.json")
+async def assetlinks():
+    from fastapi.responses import FileResponse
+    return FileResponse("static/.well-known/assetlinks.json", media_type="application/json")
+
+@app.post("/api/lichat/token")
+async def generate_lichat_token(request: Request):
+    """Generates a secure LiveKit Access Token for the LiChat app."""
+    try:
+        data = await request.json()
+        room_name = data.get("roomName")
+        participant_name = data.get("participantName")
+        
+        if not room_name or not participant_name:
+            raise HTTPException(status_code=400, detail="roomName and participantName are required")
+            
+        token = AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        token.with_identity(participant_name)
+        token.with_name(participant_name)
+        token.with_grants(VideoGrants(room_join=True, room=room_name))
+        
+        return {"token": token.to_jwt()}
+    except Exception as e:
+        logger.error(f"Error generating LiChat token: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/token/{room_id}/{peer_id}")
 async def get_token(request: Request, room_id: str, peer_id: str, name: str = "Anonymous"):
     """Generates a secure LiveKit Access Token (JWT) for the client."""
@@ -79,6 +105,7 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
         token = auth_header.split("Bearer ")[1]
         try:
             decoded_token = auth.verify_id_token(token)
+            uid = decoded_token.get("uid")
             firebase_name = decoded_token.get("name")
             if not firebase_name:
                 email = decoded_token.get("email", "")
@@ -86,10 +113,29 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
             name = firebase_name
             is_admin = True
             logger.info(f"Verified Firebase user: {name} for room {room_id}")
+
+            # Check for active meetings across the account
+            if uid:
+                db = firestore.client()
+                user_ref = db.collection("users").document(uid)
+                user_doc = user_ref.get()
+                
+                if user_doc.exists:
+                    data = user_doc.to_dict()
+                    active_room = data.get("active_room")
+                    if active_room and active_room != room_id:
+                        logger.warning(f"User {uid} attempted to join {room_id} but is already active in {active_room}")
+                        from fastapi import HTTPException
+                        raise HTTPException(status_code=403, detail="You are already in another meeting.")
+                
+                # Update their active room
+                user_ref.set({"active_room": room_id}, merge=True)
+
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Firebase token verification failed: {e}")
             # Fall back to guest
-
     try:
         grant = VideoGrants(
             room_join=True,
@@ -216,6 +262,23 @@ async def stop_recording(request: Request):
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Failed to stop recording: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await lkapi.aclose()
+
+
+@app.post("/api/end_meeting")
+async def end_meeting(request: Request):
+    await verify_admin(request)
+    data = await request.json()
+    room_id = data.get("room_id")
+    
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_id))
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to end meeting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await lkapi.aclose()
@@ -355,3 +418,28 @@ scheduler.add_job(check_upcoming_meetings, 'interval', minutes=1)
 async def startup_event():
     scheduler.start()
     logger.info("APScheduler started.")
+
+@app.post("/webhook")
+async def livekit_webhook(request: Request):
+    body = await request.body()
+    auth_token = request.headers.get("Authorization", "")
+    receiver = WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        event = receiver.receive(body.decode('utf-8'), auth_token)
+        if event.event == "participant_left":
+            uid = event.participant.identity
+            # Check if this UID is a Firebase user
+            if uid:
+                db = firestore.client()
+                user_ref = db.collection("users").document(uid)
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    data = user_doc.to_dict()
+                    # Only clear if the active room matches the room they left, to prevent race conditions
+                    if data.get("active_room") == event.room.name:
+                        user_ref.set({"active_room": ""}, merge=True)
+                        logger.info(f"Cleared active_room for user {uid} via webhook")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error"}

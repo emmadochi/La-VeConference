@@ -6,10 +6,11 @@ class ApiService {
   static const String baseUrl = 'https://la-vie.lifechangerstouch.org';
 
   static Future<String> getToken(String roomName, String participantName) async {
-    // Generate a unique peer ID
-    final peerId = 'peer_${DateTime.now().millisecondsSinceEpoch}';
+    // Generate a unique peer ID or use Firebase UID
+    final user = FirebaseAuth.instance.currentUser;
+    final peerId = user?.uid ?? 'peer_${DateTime.now().millisecondsSinceEpoch}';
     
-    final authToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+    final authToken = await user?.getIdToken();
     
     final response = await http.get(
       Uri.parse('$baseUrl/token/$roomName/$peerId?name=$participantName'),
@@ -21,6 +22,9 @@ class ApiService {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return data['token'] as String;
+    } else if (response.statusCode == 403) {
+      final data = jsonDecode(response.body);
+      throw Exception(data['detail'] ?? 'You are already in another meeting.');
     } else {
       throw Exception('Failed to load token: ${response.body}');
     }

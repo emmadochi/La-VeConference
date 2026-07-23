@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, addDoc, query, where, getDocs, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { initializeFirestore, collection, addDoc, query, where, getDocs, orderBy, doc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAl5ce-oGNLAfYtvmxuez8dLzIQsM8QNjM",
@@ -15,7 +15,9 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, {
+    experimentalForceLongPolling: true
+});
 
 window.firebaseAuth = auth;
 window.firebaseDb = db;
@@ -34,6 +36,9 @@ export const fbFunctions = {
     query,
     where,
     getDocs,
-    orderBy
+    orderBy,
+    doc,
+    onSnapshot,
+    updateDoc
 };
 window.fbFunctions = fbFunctions;

@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/meetings_screen.dart';
 import 'screens/calendar_screen.dart';
-import 'screens/contacts_screen.dart';
 import 'screens/profile_screen.dart';
+import 'dart:async';
+import 'package:app_links/app_links.dart';
+import 'screens/video_room_screen.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,10 +21,56 @@ class MainLayout extends StatefulWidget {
 class _MainLayoutState extends State<MainLayout> {
   int _currentIndex = 0;
 
+  late AppLinks _appLinks;
+  StreamSubscription<Uri>? _linkSubscription;
+
   @override
   void initState() {
     super.initState();
     _initFCM();
+    _initDeepLinks();
+  }
+
+  @override
+  void dispose() {
+    _linkSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _initDeepLinks() {
+    _appLinks = AppLinks();
+
+    // Handle incoming links when the app is already open
+    _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
+      _handleDeepLink(uri);
+    });
+
+    // Handle initial link if the app was opened via link
+    _appLinks.getInitialLink().then((uri) {
+      if (uri != null) {
+        _handleDeepLink(uri);
+      }
+    });
+  }
+
+  void _handleDeepLink(Uri uri) {
+    if (uri.path == '/static/index.html' || uri.path == '/' || uri.path.isEmpty) {
+      final roomId = uri.queryParameters['room'];
+      // final passcode = uri.queryParameters['passcode'];
+
+      if (roomId != null && roomId.isNotEmpty) {
+        final userName = FirebaseAuth.instance.currentUser?.displayName ?? 'Guest';
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VideoRoomScreen(
+              roomName: roomId,
+              participantName: userName,
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _initFCM() async {
@@ -89,7 +137,6 @@ class _MainLayoutState extends State<MainLayout> {
     const DashboardScreen(),
     const MeetingsScreen(),
     const CalendarScreen(),
-    const ContactsScreen(),
     const ProfileScreen(),
   ];
 
@@ -138,10 +185,6 @@ class _MainLayoutState extends State<MainLayout> {
                 BottomNavigationBarItem(
                   icon: Icon(Icons.calendar_today_outlined),
                   label: 'Calendar',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.person_outline),
-                  label: 'Contacts',
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.account_circle_outlined),

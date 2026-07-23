@@ -72,6 +72,20 @@
                 <div class="hero-graphic">
                     <!-- Glassmorphic Dashboard Card -->
                     <div id="dashboardSection" class="dashboard-section glass-card" style="display: none;">
+                        <!-- Active Meeting Banner -->
+                        <div id="activeMeetingBanner" class="active-meeting-banner" style="display: none; background: rgba(0, 229, 255, 0.1); border: 1px solid #00e5ff; border-radius: 12px; padding: 15px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h4 style="margin: 0; color: #00e5ff; font-weight: 600;">Active Meeting</h4>
+                                    <p id="activeMeetingRoom" style="margin: 5px 0 0 0; font-size: 0.9rem; color: #fff;"></p>
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <button id="rejoinActiveBtn" class="primary-btn" style="padding: 8px 16px; min-height: unset; border-radius: 8px;">Rejoin</button>
+                                    <button id="leaveActiveBtn" class="nav-btn" style="padding: 8px 16px; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px;">Leave</button>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div class="dashboard-header">
                             <h3>Upcoming Meetings</h3>
                             <span class="material-symbols-outlined">event</span>
@@ -178,6 +192,18 @@
             </div>
         </div>
 
+        <!-- Unstable Network Modal -->
+        <div id="unstableNetworkModal" class="modal-overlay" style="display: none; z-index: 9999;">
+            <div class="modal-content" style="text-align: center;">
+                <h2 style="color: #ef4444; margin-bottom: 10px;">Unstable Network</h2>
+                <p class="modal-desc" style="margin-bottom: 20px;">Your network connection is unstable. Would you like to turn off your video to improve call quality?</p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button id="keepVideoOnBtn" class="nav-btn" style="border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px;">Keep Video On</button>
+                    <button id="turnOffVideoBtn" class="primary-btn" style="border-radius: 8px;">Turn Off Video</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Schedule Modal -->
         <div id="scheduleModal" class="modal-overlay" style="display: none;">
             <div class="modal-content">
@@ -225,19 +251,82 @@
             </div>
         </div>
         
+        <!-- Leave Modal -->
+        <div id="leaveModal" class="modal-overlay" style="display: none; z-index: 9999;">
+            <div class="modal-content" style="text-align: center;">
+                <button class="close-modal" id="closeLeaveModalBtn">&times;</button>
+                <h2 style="color: #ef4444; margin-bottom: 12px; font-weight: 700;">Leave Meeting</h2>
+                <p class="modal-desc" style="margin-bottom: 24px; font-size: 1.05rem;">You are the host. Do you want to leave the meeting or end it for everyone?</p>
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                    <button id="endMeetingForAllBtn" class="danger-btn">End Meeting for All</button>
+                    <button id="leaveMeetingOnlyBtn" class="secondary-btn">Leave Meeting Only</button>
+                </div>
+            </div>
+        </div>
+        
         <!-- IN-CALL APP LAYOUT -->
         <div class="app-layout" id="appLayout" style="display: none;">
-            <div class="meeting-info-top" id="meetingInfo">
-                <!-- Code injected here -->
-            </div>
+            <!-- Left Sidebar Navigation -->
+            <aside class="left-sidebar" id="leftSidebar">
+                <div class="sidebar-brand">
+                    <div class="logo-circle">
+                        <span class="logo-text-short">LV</span>
+                    </div>
+                    <span class="sidebar-title">La-Vie</span>
+                </div>
+                
+                <nav class="sidebar-nav">
+                    <button class="sidebar-nav-btn active" id="navPeopleBtn" title="People">
+                        <span class="material-symbols-outlined">group</span>
+                        <span class="sidebar-nav-text">People</span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="navChatBtn" title="Chat">
+                        <span class="material-symbols-outlined">chat</span>
+                        <span class="sidebar-nav-text">Chat</span>
+                        <span class="sidebar-badge" id="navChatBadge" style="display:none;"></span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="navWhiteboardBtn" title="Whiteboard">
+                        <span class="material-symbols-outlined">draw</span>
+                        <span class="sidebar-nav-text">Whiteboard</span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="navPollsBtn" title="Polls">
+                        <span class="material-symbols-outlined">bar_chart</span>
+                        <span class="sidebar-nav-text">Polls</span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="navQaBtn" title="Q&A">
+                        <span class="material-symbols-outlined">help_center</span>
+                        <span class="sidebar-nav-text">Q&amp;A</span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="navSettingsBtn" title="Settings" style="margin-top: auto;">
+                        <span class="material-symbols-outlined">settings</span>
+                        <span class="sidebar-nav-text">Settings</span>
+                    </button>
+                    <button class="sidebar-nav-btn" id="collapseSidebarBtn" title="Collapse">
+                        <span class="material-symbols-outlined" id="collapseIcon">keyboard_double_arrow_left</span>
+                        <span class="sidebar-nav-text">Collapse</span>
+                    </button>
+                </nav>
+            </aside>
             
             <div class="main-column" id="mainColumn">
+                <!-- Mobile Menu Toggle Button (visible only on small screens) -->
+                <button id="mobileMenuBtn" class="control-btn" style="position: absolute; top: 15px; left: 15px; z-index: 1000; display: none;" title="Menu">
+                    <span class="material-symbols-outlined">menu</span>
+                </button>
+
+                <div class="meeting-info-top" id="meetingInfo">
+                    <!-- Code injected here -->
+                </div>
                 <div class="whiteboard-container" id="whiteboardContainer">
+                    <button class="mobile-whiteboard-close" id="mobileWhiteboardCloseBtn">
+                        <span class="material-symbols-outlined">close</span> Back to Meeting
+                    </button>
                     <!-- Iframe injected via JS -->
                 </div>
                 <div class="video-grid" id="videoGrid">
                     <div class="video-wrapper local" id="wrapper-local-camera">
                         <video id="localVideo" autoplay muted playsinline></video>
+                        <div class="avatar-placeholder" id="localAvatar">You</div>
                         <span class="label" id="localLabel">You</span>
                         <button class="pin-overlay-btn" title="Spotlight Video">
                             <span class="material-symbols-outlined">push_pin</span>
@@ -246,39 +335,19 @@
                 </div>
                 
                 <div class="media-controls" id="mediaControls" style="display: none;">
-                    <button id="toggleMicBtn" class="control-btn active">
+                    <button id="toggleMicBtn" class="control-btn active" title="Mute/Unmute">
                         <span class="material-symbols-outlined">mic</span>
-                        <span class="btn-text">Mute</span>
                     </button>
-                    <button id="toggleVideoBtn" class="control-btn active">
+                    <button id="toggleVideoBtn" class="control-btn active" title="Start/Stop Video">
                         <span class="material-symbols-outlined">videocam</span>
-                        <span class="btn-text">Hide</span>
                     </button>
-                    
-                    <!-- Host Only: Mute All -->
-                    <button id="muteAllBtn" class="control-btn" title="Mute All" style="display: none; color: #ef4444;">
-                        <span class="material-symbols-outlined">mic_off</span>
-                        <span class="btn-text" style="color: #e2e8f0;">Mute All</span>
-                    </button>
-
-                    <button id="flipCameraBtn" class="control-btn flip-cam-btn" title="Flip Camera">
-                        <span class="material-symbols-outlined">flip_camera_ios</span>
-                        <span class="btn-text">Flip</span>
-                    </button>
-                    <button id="toggleChatBtn" class="control-btn" title="Chat">
-                        <span class="material-symbols-outlined">chat</span>
-                        <span class="btn-text">Chat</span>
-                        <div class="chat-badge" id="chatBadge"></div>
-                    </button>
-                    <button id="togglePeopleBtn" class="control-btn" title="Participants">
-                        <span class="material-symbols-outlined">group</span>
-                        <span class="btn-text">People</span>
+                    <button id="toggleScreenBtn" class="control-btn" title="Share Screen">
+                        <span class="material-symbols-outlined">present_to_all</span>
                     </button>
                     
                     <div class="react-wrapper" style="position: relative;">
                         <button id="toggleReactBtn" class="control-btn" title="React">
                             <span class="material-symbols-outlined">add_reaction</span>
-                            <span class="btn-text">React</span>
                         </button>
                         <div class="emoji-popover" id="emojiPopover" style="display: none;">
                             <button class="emoji-btn">👍</button>
@@ -292,131 +361,131 @@
                     
                     <button id="toggleHandBtn" class="control-btn" title="Raise Hand">
                         <span class="material-symbols-outlined">front_hand</span>
-                        <span class="btn-text">Hand</span>
                     </button>
 
-                    <button id="toggleWhiteboardBtn" class="control-btn" title="Whiteboard">
-                        <span class="material-symbols-outlined">draw</span>
-                        <span class="btn-text">Board</span>
-                    </button>
+                    <div class="more-options-wrapper" style="position: relative;">
+                        <button id="toggleMoreBtn" class="control-btn" title="More Options">
+                            <span class="material-symbols-outlined">more_horiz</span>
+                        </button>
+                        <div class="dropdown-menu glassmorphic" id="moreOptionsMenu" style="display: none; bottom: 100%; top: auto; left: 50%; transform: translateX(-50%); margin-bottom: 10px;">
+                            <button id="toggleDataSaverBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">data_saver_on</span> Data Saver
+                            </button>
+                            <button id="toggleRecordBtn" class="dropdown-item" style="display: none;">
+                                <span class="material-symbols-outlined">radio_button_checked</span> Record
+                            </button>
+                            <button id="toggleEffectsBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">auto_awesome</span> Effects
+                            </button>
+                            <button id="toggleNoiseBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">noise_control_off</span> AI Noise Cancellation
+                            </button>
+                            <button id="shareLinkBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">link</span> Copy Meeting Link
+                            </button>
+                            <button id="flipCameraBtn" class="dropdown-item flip-cam-btn" style="display: none;">
+                                <span class="material-symbols-outlined">flip_camera_ios</span> Flip Camera
+                            </button>
+                            <button id="muteAllBtn" class="dropdown-item" style="display: none; color: #ef4444;">
+                                <span class="material-symbols-outlined">mic_off</span> Mute All
+                            </button>
+                        </div>
+                    </div>
 
-                    <button id="togglePollsBtn" class="control-btn" title="Polls & Q&amp;A">
-                        <span class="material-symbols-outlined">poll</span>
-                        <span class="btn-text">Polls</span>
-                        <div class="chat-badge" id="qaBadge" style="display:none;"></div>
-                    </button>
-
-                    <button id="toggleRecordBtn" class="control-btn" title="Record Audio" style="display: none;">
-                        <span class="material-symbols-outlined">radio_button_checked</span>
-                        <span class="btn-text">Record</span>
-                    </button>
-                    <button id="toggleEffectsBtn" class="control-btn" title="Video Effects">
-                        <span class="material-symbols-outlined">auto_awesome</span>
-                        <span class="btn-text">Effects</span>
-                    </button>
-                    <button id="toggleNoiseBtn" class="control-btn" title="AI Noise Cancellation">
-                        <span class="material-symbols-outlined">noise_control_off</span>
-                        <span class="btn-text">Krisp</span>
-                    </button>
-                    <button id="toggleScreenBtn" class="control-btn" title="Share Screen">
-                        <span class="material-symbols-outlined">present_to_all</span>
-                        <span class="btn-text">Share</span>
-                    </button>
-                    <button id="leaveCallBtn" class="control-btn leave-btn">
+                    <button id="leaveCallBtn" class="control-btn leave-btn" title="Leave Call">
                         <span class="material-symbols-outlined">call_end</span>
-                        <span class="btn-text">Leave</span>
                     </button>
                 </div>
             </div>
             
-            <div class="chat-sidebar">
-                <div class="chat-header">
-                    <h3>In-call messages</h3>
-                    <button id="closeChatBtn" class="close-chat-btn" title="Minimize Chat">
-                        <span class="material-symbols-outlined">close</span>
-                    </button>
+            <div class="right-panel-container" id="rightPanelContainer">
+                <div class="chat-sidebar" id="chatSidebar">
+                    <div class="chat-header">
+                        <h3>Chat</h3>
+                        <button id="closeChatBtn" class="close-chat-btn" title="Close">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-system">Messages can only be seen by people in the call and are deleted when the call ends.</div>
+                    </div>
+                    <div class="chat-input">
+                        <input type="text" id="chatInput" placeholder="Send a message..." disabled>
+                        <button id="sendBtn" disabled><span class="material-symbols-outlined">send</span></button>
+                    </div>
                 </div>
-                <div class="chat-messages" id="chatMessages">
-                    <div class="chat-system">Messages can only be seen by people in the call and are deleted when the call ends.</div>
-                </div>
-                <div class="chat-input">
-                    <input type="text" id="chatInput" placeholder="Send a message..." disabled>
-                    <button id="sendBtn" disabled><span class="material-symbols-outlined">send</span></button>
-                </div>
-            </div>
 
-            <!-- Participants Sidebar -->
-            <div class="chat-sidebar people-sidebar" id="peopleSidebar">
-                <div class="chat-header">
-                    <h3>Participants</h3>
-                    <button class="close-chat-btn" id="closePeopleBtn"><span class="material-symbols-outlined">close</span></button>
+                <div class="chat-sidebar people-sidebar" id="peopleSidebar">
+                    <div class="chat-header">
+                        <h3>People</h3>
+                        <button class="close-chat-btn" id="closePeopleBtn"><span class="material-symbols-outlined">close</span></button>
+                    </div>
+                    <div class="chat-messages" id="peopleList" style="gap: 8px;">
+                        <!-- Participants list goes here -->
+                    </div>
                 </div>
-                <div class="chat-messages" id="peopleList" style="gap: 8px;">
-                    <!-- Participants list goes here -->
+                
+                <div class="chat-sidebar poll-qa-sidebar" id="pollQaSidebar">
+                    <div class="chat-header">
+                        <div class="poll-qa-tabs">
+                            <button class="pq-tab active" data-tab="polls" id="tabPolls">Polls</button>
+                            <button class="pq-tab" data-tab="qa" id="tabQA">Q&amp;A</button>
+                        </div>
+                        <button id="closePollQaBtn" class="close-chat-btn" title="Close">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+                    </div>
+
+                    <!-- Polls Tab -->
+                    <div class="pq-tab-content" id="tabContentPolls">
+                        <!-- Host: Create Poll -->
+                        <div class="poll-create-section" id="pollCreateSection" style="display:none;">
+                            <h4 class="poll-section-title">Create a Poll</h4>
+                            <input type="text" id="pollQuestionInput" class="modal-input" placeholder="Ask a question..." maxlength="200">
+                            <div id="pollOptionsContainer">
+                                <input type="text" class="modal-input poll-option-input" placeholder="Option 1">
+                                <input type="text" class="modal-input poll-option-input" placeholder="Option 2">
+                            </div>
+                            <button id="addPollOptionBtn" class="pq-secondary-btn">+ Add Option</button>
+                            <button id="launchPollBtn" class="pq-primary-btn">Launch Poll</button>
+                        </div>
+
+                        <!-- Active Poll View -->
+                        <div id="pollActiveSection" style="display:none;">
+                            <div class="poll-active-header">
+                                <p class="poll-question-display" id="activePollQuestion"></p>
+                                <button id="endPollBtn" class="pq-danger-btn host-only" style="display:none;">End Poll</button>
+                            </div>
+                            <div id="pollOptionsDisplay"></div>
+                            <div id="pollResultsBar"></div>
+                        </div>
+
+                        <!-- Empty state -->
+                        <div id="pollEmptyState" class="pq-empty-state">
+                            <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">poll</span>
+                            <p>No active poll.</p>
+                            <small>The host can launch a poll for everyone.</small>
+                            <button id="showCreatePollBtn" class="pq-primary-btn" style="margin-top: 15px;">Create a Poll</button>
+                        </div>
+                    </div>
+
+                    <!-- Q&A Tab -->
+                    <div class="pq-tab-content" id="tabContentQA" style="display:none;">
+                        <div class="qa-questions-list" id="qaQuestionsList">
+                            <div class="pq-empty-state" id="qaEmptyState">
+                                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">chat_bubble_outline</span>
+                                <p>No questions yet.</p>
+                                <small>Be the first to ask!</small>
+                            </div>
+                        </div>
+                        <div class="qa-input-area">
+                            <input type="text" id="qaQuestionInput" class="modal-input" placeholder="Ask the host a question..." maxlength="300">
+                            <button id="submitQaBtn" class="pq-primary-btn">Submit</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Live Polls & Q&A Sidebar -->
-    <div id="pollQaSidebar" class="poll-qa-sidebar">
-        <div class="poll-qa-header">
-            <div class="poll-qa-tabs">
-                <button class="pq-tab active" data-tab="polls" id="tabPolls">📊 Polls</button>
-                <button class="pq-tab" data-tab="qa" id="tabQA">❓ Q&amp;A</button>
-            </div>
-            <button id="closePollQaBtn" class="close-chat-btn" title="Close">
-                <span class="material-symbols-outlined">close</span>
-            </button>
-        </div>
-
-        <!-- Polls Tab -->
-        <div class="pq-tab-content" id="tabContentPolls">
-            <!-- Host: Create Poll -->
-            <div class="poll-create-section" id="pollCreateSection" style="display:none;">
-                <h4 class="poll-section-title">Create a Poll</h4>
-                <input type="text" id="pollQuestionInput" class="modal-input" placeholder="Ask a question..." maxlength="200">
-                <div id="pollOptionsContainer">
-                    <input type="text" class="modal-input poll-option-input" placeholder="Option 1">
-                    <input type="text" class="modal-input poll-option-input" placeholder="Option 2">
-                </div>
-                <button id="addPollOptionBtn" class="pq-secondary-btn">+ Add Option</button>
-                <button id="launchPollBtn" class="pq-primary-btn">Launch Poll</button>
-            </div>
-
-            <!-- Active Poll View -->
-            <div id="pollActiveSection" style="display:none;">
-                <div class="poll-active-header">
-                    <p class="poll-question-display" id="activePollQuestion"></p>
-                    <button id="endPollBtn" class="pq-danger-btn host-only" style="display:none;">End Poll</button>
-                </div>
-                <div id="pollOptionsDisplay"></div>
-                <div id="pollResultsBar"></div>
-            </div>
-
-            <!-- Empty state -->
-            <div id="pollEmptyState" class="pq-empty-state">
-                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">poll</span>
-                <p>No active poll.</p>
-                <small>The host can launch a poll for everyone.</small>
-            </div>
-        </div>
-
-        <!-- Q&A Tab -->
-        <div class="pq-tab-content" id="tabContentQA" style="display:none;">
-            <div class="qa-questions-list" id="qaQuestionsList">
-                <div class="pq-empty-state" id="qaEmptyState">
-                    <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted);">chat_bubble_outline</span>
-                    <p>No questions yet.</p>
-                    <small>Be the first to ask!</small>
-                </div>
-            </div>
-            <div class="qa-input-area">
-                <input type="text" id="qaQuestionInput" class="modal-input" placeholder="Ask the host a question..." maxlength="300">
-                <button id="submitQaBtn" class="pq-primary-btn">Submit</button>
-            </div>
-        </div>
-    </div>
     
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>

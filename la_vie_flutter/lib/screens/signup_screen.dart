@@ -82,7 +82,7 @@ class _SignupScreenState extends State<SignupScreen> {
         );
       }
     } on GoogleSignInException catch (e) {
-      if (e.code == 'sign_in_canceled' || e.code == 'canceled') {
+      if (e.code == 'sign_in_canceled' || e.code == 'canceled' || e.code == 'GoogleSignInExceptionCode.canceled' || e.toString().toLowerCase().contains('cancel')) {
         return;
       }
       setState(() {

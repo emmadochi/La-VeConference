@@ -39,18 +39,18 @@ const toggleMicBtn = document.getElementById('toggleMicBtn');
 const toggleVideoBtn = document.getElementById('toggleVideoBtn');
 const flipCameraBtn = document.getElementById('flipCameraBtn');
 const toggleScreenBtn = document.getElementById('toggleScreenBtn');
-const toggleChatBtn = document.getElementById('toggleChatBtn');
-const togglePeopleBtn = document.getElementById('togglePeopleBtn');
+const toggleChatBtn = document.getElementById('navChatBtn') || document.getElementById('toggleChatBtn');
+const togglePeopleBtn = document.getElementById('navPeopleBtn') || document.getElementById('togglePeopleBtn');
 const toggleReactBtn = document.getElementById('toggleReactBtn');
 const toggleEffectsBtn = document.getElementById('toggleEffectsBtn');
 const effectsModal = document.getElementById('effectsModal');
 const closeEffectsBtn = document.getElementById('closeEffectsBtn');
 const effectsGrid = document.getElementById('effectsGrid');
 const toggleNoiseBtn = document.getElementById('toggleNoiseBtn');
-const toggleWhiteboardBtn = document.getElementById('toggleWhiteboardBtn');
+const toggleWhiteboardBtn = document.getElementById('navWhiteboardBtn') || document.getElementById('toggleWhiteboardBtn');
 const mainColumn = document.getElementById('mainColumn');
 const whiteboardContainer = document.getElementById('whiteboardContainer');
-const togglePollsBtn = document.getElementById('togglePollsBtn');
+const togglePollsBtn = document.getElementById('navPollsBtn') || document.getElementById('togglePollsBtn');
 const pollQaSidebar = document.getElementById('pollQaSidebar');
 const closePollQaBtn = document.getElementById('closePollQaBtn');
 const qaBadge = document.getElementById('qaBadge');
@@ -351,6 +351,20 @@ async function startCall(roomId) {
             _applySubscriptionQualities();
         });
 
+        currentRoom.on(RoomEvent.TrackMuted, (publication, participant) => {
+            if (publication.kind === 'video') {
+                const wrapper = document.getElementById(`wrapper-${participant.identity}-${publication.source}`);
+                if (wrapper) wrapper.classList.add('video-muted');
+            }
+        });
+
+        currentRoom.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+            if (publication.kind === 'video') {
+                const wrapper = document.getElementById(`wrapper-${participant.identity}-${publication.source}`);
+                if (wrapper) wrapper.classList.remove('video-muted');
+            }
+        });
+
         currentRoom.on(RoomEvent.ParticipantConnected, (participant) => {
             appendSystemMessage(`${participant.name || 'Anonymous'} joined the room.`);
             _updateParticipantOrder();
@@ -415,7 +429,22 @@ async function startCall(roomId) {
                 updateHandRaiseUI(data.senderId || (participant ? participant.identity : null), data.state);
             } else if (data.type === 'whiteboard_toggle') {
                 if (data.state && !isWhiteboardActive) {
+                    isWhiteboardActive = true;
+                    if (toggleWhiteboardBtn) toggleWhiteboardBtn.classList.add('active');
+                    mainColumn.classList.add('with-whiteboard');
+                    whiteboardContainer.classList.add('active');
+                    if (!whiteboardContainer.querySelector('iframe')) {
+                        const iframe = document.createElement('iframe');
+                        iframe.src = `https://wbo.ophir.dev/boards/lavie-${currentRoom.name}`;
+                        whiteboardContainer.appendChild(iframe);
+                    }
                     showToast(`${data.senderId || (participant ? participant.name : 'Someone')} opened the whiteboard.`);
+                } else if (!data.state && isWhiteboardActive) {
+                    isWhiteboardActive = false;
+                    if (toggleWhiteboardBtn) toggleWhiteboardBtn.classList.remove('active');
+                    mainColumn.classList.remove('with-whiteboard');
+                    whiteboardContainer.classList.remove('active');
+                    showToast('Whiteboard closed by host.');
                 }
             } else if (data.type === 'poll_launch') {
                 handlePollLaunch(data.poll);
@@ -456,7 +485,7 @@ async function startCall(roomId) {
                 isScreenSharing = false;
                 toggleScreenBtn.classList.remove('active');
                 toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'present_to_all';
-                toggleScreenBtn.querySelector('.btn-text').textContent = 'Share';
+                (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Share'));
             }
         });
 
@@ -715,13 +744,13 @@ function leaveCall() {
 
     toggleMicBtn.classList.add('active');
     toggleMicBtn.querySelector('.material-symbols-outlined').textContent = 'mic';
-    toggleMicBtn.querySelector('.btn-text').textContent = 'Mute';
+    (toggleMicBtn.querySelector('.btn-text') && (toggleMicBtn.querySelector('.btn-text').textContent = 'Mute'));
     toggleVideoBtn.classList.add('active');
     toggleVideoBtn.querySelector('.material-symbols-outlined').textContent = 'videocam';
-    toggleVideoBtn.querySelector('.btn-text').textContent = 'Hide';
+    (toggleVideoBtn.querySelector('.btn-text') && (toggleVideoBtn.querySelector('.btn-text').textContent = 'Hide'));
     toggleScreenBtn.classList.remove('active');
     toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'present_to_all';
-    toggleScreenBtn.querySelector('.btn-text').textContent = 'Share';
+    (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Share'));
 
     if (backgroundProcessor) {
         backgroundProcessor.switchTo({ mode: 'disabled' }).catch(console.error);
@@ -758,7 +787,39 @@ function leaveCall() {
     sendBtn.disabled = true;
 }
 
-leaveCallBtn.addEventListener('click', leaveCall);
+leaveCallBtn.addEventListener('click', () => {
+    if (isAdmin) {
+        document.getElementById('leaveModal').style.display = 'flex';
+    } else {
+        leaveCall();
+    }
+});
+
+const closeLeaveModalBtn = document.getElementById('closeLeaveModalBtn');
+const leaveMeetingOnlyBtn = document.getElementById('leaveMeetingOnlyBtn');
+const endMeetingForAllBtn = document.getElementById('endMeetingForAllBtn');
+
+if (closeLeaveModalBtn) closeLeaveModalBtn.addEventListener('click', () => document.getElementById('leaveModal').style.display = 'none');
+if (leaveMeetingOnlyBtn) leaveMeetingOnlyBtn.addEventListener('click', () => {
+    document.getElementById('leaveModal').style.display = 'none';
+    leaveCall();
+});
+if (endMeetingForAllBtn) endMeetingForAllBtn.addEventListener('click', async () => {
+    if (!currentRoom) return;
+    try {
+        const idToken = await getAuthToken();
+        await fetch('/api/end_meeting', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+            body: JSON.stringify({ room_id: currentRoom.name })
+        });
+        document.getElementById('leaveModal').style.display = 'none';
+        leaveCall();
+    } catch (e) {
+        console.error("Failed to end meeting", e);
+        showToast("Failed to end meeting.", true);
+    }
+});
 
 // --- Media Controls ---
 toggleMicBtn.addEventListener('click', async () => {
@@ -781,6 +842,9 @@ toggleVideoBtn.addEventListener('click', async () => {
     const text = toggleVideoBtn.querySelector('.btn-text');
     icon.textContent = isVideoEnabled ? 'videocam' : 'videocam_off';
     text.textContent = isVideoEnabled ? 'Hide' : 'Show';
+    
+    const localWrapper = document.getElementById('wrapper-local-camera');
+    if (localWrapper) localWrapper.classList.toggle('video-muted', !isVideoEnabled);
 });
 
 if (flipCameraBtn) {
@@ -809,7 +873,7 @@ toggleScreenBtn.addEventListener('click', async () => {
             isScreenSharing = true;
             toggleScreenBtn.classList.add('active');
             toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'cancel_presentation';
-            toggleScreenBtn.querySelector('.btn-text').textContent = 'Stop';
+            (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Stop'));
         } catch (err) {
             console.error("Error sharing screen:", err);
             showToast("Could not share screen: " + (err.message || "Not supported on this device."), true);
@@ -819,7 +883,7 @@ toggleScreenBtn.addEventListener('click', async () => {
         isScreenSharing = false;
         toggleScreenBtn.classList.remove('active');
         toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'present_to_all';
-        toggleScreenBtn.querySelector('.btn-text').textContent = 'Share';
+        (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Share'));
     }
 });
 
@@ -839,48 +903,15 @@ if (toggleRecordBtn) {
 if (toggleChatBtn) {
     const chatSidebar = document.querySelector('.chat-sidebar:not(.people-sidebar)');
     const closeChatBtn = document.getElementById('closeChatBtn');
-    toggleChatBtn.addEventListener('click', () => {
-        if (chatSidebar) {
-            if (peopleSidebar && peopleSidebar.classList.contains('show')) {
-                peopleSidebar.classList.remove('show');
-                togglePeopleBtn.classList.remove('active');
-            }
-            chatSidebar.classList.toggle('show');
-            const isOpen = chatSidebar.classList.contains('show');
-            toggleChatBtn.classList.toggle('active', isOpen);
-            if (isOpen) {
-                const badge = document.getElementById('chatBadge');
-                if (badge) badge.style.display = 'none';
-            }
-        }
-    });
-    if (closeChatBtn) {
-        closeChatBtn.addEventListener('click', () => {
-            chatSidebar.classList.remove('show');
-            toggleChatBtn.classList.remove('active');
-        });
-    }
+    toggleChatBtn.addEventListener('click', () => { toggleSidebar(chatSidebar, toggleChatBtn); });
+    if (closeChatBtn) { closeChatBtn.addEventListener('click', () => { closeAllSidebars(); }); }
 }
 
 // People sidebar logic
 if (togglePeopleBtn) {
     const chatSidebar = document.querySelector('.chat-sidebar:not(.people-sidebar)');
-    togglePeopleBtn.addEventListener('click', () => {
-        if (peopleSidebar) {
-            if (chatSidebar && chatSidebar.classList.contains('show')) {
-                chatSidebar.classList.remove('show');
-                toggleChatBtn.classList.remove('active');
-            }
-            peopleSidebar.classList.toggle('show');
-            togglePeopleBtn.classList.toggle('active', peopleSidebar.classList.contains('show'));
-        }
-    });
-    if (closePeopleBtn) {
-        closePeopleBtn.addEventListener('click', () => {
-            peopleSidebar.classList.remove('show');
-            togglePeopleBtn.classList.remove('active');
-        });
-    }
+    togglePeopleBtn.addEventListener('click', () => { toggleSidebar(peopleSidebar, togglePeopleBtn); });
+    if (closePeopleBtn) { closePeopleBtn.addEventListener('click', () => { closeAllSidebars(); }); }
 }
 
 // Sending messages
@@ -1094,6 +1125,15 @@ function attachVideoTrack(track, participant, source) {
         wrapper.appendChild(pinBtn);
         wrapper.appendChild(pipBtn);
 
+        const avatarDiv = document.createElement('div');
+        avatarDiv.className = 'avatar-placeholder';
+        avatarDiv.textContent = (participant.name || participant.identity || '?').charAt(0).toUpperCase();
+        wrapper.appendChild(avatarDiv);
+
+        if (track.isMuted) {
+            wrapper.classList.add('video-muted');
+        }
+
         if (isAdmin && participant && currentRoom && participant.identity !== currentRoom.localParticipant.identity && source !== Track.Source.ScreenShare) {
             const videoMuteBtn = document.createElement('button');
             videoMuteBtn.className = 'video-mute-overlay-btn';
@@ -1192,7 +1232,7 @@ async function startRecording() {
 
         if (toggleRecordBtn) {
             toggleRecordBtn.classList.add('recording');
-            toggleRecordBtn.querySelector('.btn-text').textContent = 'Stop Rec';
+            (toggleRecordBtn.querySelector('.btn-text') && (toggleRecordBtn.querySelector('.btn-text').textContent = 'Stop Rec'));
         }
         showToast("Recording started");
     } catch(err) {
@@ -1209,7 +1249,7 @@ function stopRecording() {
     audioSourceNodes.clear();
     if (toggleRecordBtn) {
         toggleRecordBtn.classList.remove('recording');
-        toggleRecordBtn.querySelector('.btn-text').textContent = 'Record';
+        (toggleRecordBtn.querySelector('.btn-text') && (toggleRecordBtn.querySelector('.btn-text').textContent = 'Record'));
     }
 }
 
@@ -1389,6 +1429,16 @@ if (toggleWhiteboardBtn) {
     });
 }
 
+const mobileWhiteboardCloseBtn = document.getElementById('mobileWhiteboardCloseBtn');
+if (mobileWhiteboardCloseBtn) {
+    mobileWhiteboardCloseBtn.addEventListener('click', () => {
+        isWhiteboardActive = false;
+        if (toggleWhiteboardBtn) toggleWhiteboardBtn.classList.remove('active');
+        mainColumn.classList.remove('with-whiteboard');
+        whiteboardContainer.classList.remove('active');
+    });
+}
+
 // ==========================================
 // LIVE POLLS & Q&A
 // ==========================================
@@ -1398,22 +1448,8 @@ function broadcast(payload) {
     currentRoom.localParticipant.publishData(data, { reliable: true });
 }
 
-if (togglePollsBtn) {
-    togglePollsBtn.addEventListener('click', () => {
-        isPollQaOpen = !isPollQaOpen;
-        pollQaSidebar.classList.toggle('open', isPollQaOpen);
-        togglePollsBtn.classList.toggle('active', isPollQaOpen);
-        if (isPollQaOpen) { newQaCount = 0; if (qaBadge) qaBadge.style.display = 'none'; }
-    });
-}
-
-if (closePollQaBtn) {
-    closePollQaBtn.addEventListener('click', () => {
-        isPollQaOpen = false;
-        pollQaSidebar.classList.remove('open');
-        togglePollsBtn.classList.remove('active');
-    });
-}
+if (togglePollsBtn) { togglePollsBtn.addEventListener('click', () => { toggleSidebar(pollQaSidebar, togglePollsBtn); }); }
+if (closePollQaBtn) { closePollQaBtn.addEventListener('click', () => { closeAllSidebars(); }); }
 
 document.querySelectorAll('.pq-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1622,4 +1658,206 @@ if (submitQaBtn && qaQuestionInput) {
         qaQuestionInput.value = '';
     });
     qaQuestionInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitQaBtn.click(); });
+}
+
+
+// ==========================================
+// SIDEBAR & MOBILE MENU TOGGLE
+// ==========================================
+
+function closeAllSidebars() {
+    [chatSidebar, peopleSidebar, pollQaSidebar].forEach(sidebar => {
+        if(sidebar) {
+            sidebar.classList.remove('active');
+            sidebar.classList.remove('show');
+            sidebar.classList.remove('open'); // For polls old css
+        }
+    });
+    [toggleChatBtn, togglePeopleBtn, togglePollsBtn].forEach(btn => {
+        if(btn) btn.classList.remove('active');
+    });
+    const rightPanelContainer = document.querySelector('.right-panel-container');
+    if(rightPanelContainer) rightPanelContainer.classList.remove('show');
+}
+
+function toggleSidebar(sidebar, btn) {
+    const rightPanelContainer = document.querySelector('.right-panel-container');
+    if (!sidebar || !rightPanelContainer) return;
+    
+    const isCurrentlyActive = sidebar.classList.contains('active') || sidebar.classList.contains('show') || sidebar.classList.contains('open');
+    
+    // Close everything first
+    closeAllSidebars();
+    
+    if (!isCurrentlyActive) {
+        // Open the requested sidebar
+        sidebar.classList.add('active');
+        sidebar.classList.add('show');
+        sidebar.classList.add('open');
+        if(btn) btn.classList.add('active');
+        rightPanelContainer.classList.add('show');
+        
+        // Remove badges
+        if (sidebar === chatSidebar) {
+            const badge = document.getElementById('chatBadge');
+            if (badge) badge.style.display = 'none';
+        }
+        if (sidebar === pollQaSidebar) {
+            if (typeof qaBadge !== 'undefined' && qaBadge) qaBadge.style.display = 'none';
+            if (typeof newQaCount !== 'undefined') newQaCount = 0;
+            if (typeof isPollQaOpen !== 'undefined') isPollQaOpen = true;
+        }
+    } else {
+        if (sidebar === pollQaSidebar && typeof isPollQaOpen !== 'undefined') isPollQaOpen = false;
+    }
+}
+
+// Mobile Menu Toggle
+const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+const leftSidebar = document.querySelector('.left-sidebar');
+if (mobileMenuBtn && leftSidebar) {
+    mobileMenuBtn.addEventListener('click', () => {
+        leftSidebar.classList.toggle('mobile-open');
+    });
+}
+
+
+const navQaBtn = document.getElementById('navQaBtn');
+if (navQaBtn) {
+    navQaBtn.addEventListener('click', () => {
+        if (typeof toggleSidebar !== 'undefined' && typeof pollQaSidebar !== 'undefined') {
+            toggleSidebar(pollQaSidebar, navQaBtn);
+            // Optionally, switch to Q&A tab if such logic exists
+            const qaTab = document.getElementById('qaTabBtn');
+            if (qaTab) qaTab.click();
+        }
+    });
+}
+
+
+// ==========================================
+// EXTRA MEDIA CONTROLS LOGIC
+// ==========================================
+
+const toggleMoreBtn = document.getElementById('toggleMoreBtn');
+const moreOptionsMenu = document.getElementById('moreOptionsMenu');
+if (toggleMoreBtn && moreOptionsMenu) {
+    toggleMoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isShowing = moreOptionsMenu.style.display === 'block';
+        moreOptionsMenu.style.display = isShowing ? 'none' : 'block';
+        toggleMoreBtn.classList.toggle('active', !isShowing);
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!toggleMoreBtn.contains(e.target) && !moreOptionsMenu.contains(e.target)) {
+            moreOptionsMenu.style.display = 'none';
+            toggleMoreBtn.classList.remove('active');
+        }
+    });
+}
+
+
+if (toggleReactBtn && emojiPopover) {
+    toggleReactBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isShowing = emojiPopover.style.display === 'flex' || emojiPopover.style.display === 'block';
+        emojiPopover.style.display = isShowing ? 'none' : 'flex';
+        toggleReactBtn.classList.toggle('active', !isShowing);
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!toggleReactBtn.contains(e.target) && !emojiPopover.contains(e.target)) {
+            emojiPopover.style.display = 'none';
+            toggleReactBtn.classList.remove('active');
+        }
+    });
+    
+    // Add logic for individual emoji clicks
+    emojiPopover.querySelectorAll('.emoji-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            emojiPopover.style.display = 'none';
+            toggleReactBtn.classList.remove('active');
+            if(typeof showToast !== 'undefined') showToast('Reaction sent: ' + btn.textContent);
+        });
+    });
+}
+
+
+if (toggleHandBtn) {
+    toggleHandBtn.addEventListener('click', () => {
+        toggleHandBtn.classList.toggle('active');
+        const isRaised = toggleHandBtn.classList.contains('active');
+        if(typeof showToast !== 'undefined') showToast(isRaised ? 'Hand raised' : 'Hand lowered');
+    });
+}
+
+const shareLinkBtn = document.getElementById('shareLinkBtn');
+if (shareLinkBtn) {
+    shareLinkBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(window.location.href).then(() => {
+            if(typeof showToast !== 'undefined') showToast('Meeting link copied to clipboard!');
+        }).catch(err => {
+            if(typeof showToast !== 'undefined') showToast('Failed to copy link.', true);
+        });
+        if(moreOptionsMenu) moreOptionsMenu.style.display = 'none';
+        if(toggleMoreBtn) toggleMoreBtn.classList.remove('active');
+    });
+}
+
+
+// Sidebar Collapse Logic
+const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
+const leftSidebarEl = document.querySelector('.left-sidebar');
+const collapseIcon = document.getElementById('collapseIcon');
+
+if (collapseSidebarBtn && leftSidebarEl) {
+    collapseSidebarBtn.addEventListener('click', () => {
+        leftSidebarEl.classList.toggle('icon-only');
+        const isCollapsed = leftSidebarEl.classList.contains('icon-only');
+        if (collapseIcon) {
+            collapseIcon.textContent = isCollapsed ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left';
+        }
+        // Save preference in localStorage
+        localStorage.setItem('sidebarCollapsed', isCollapsed);
+    });
+    
+    // Check initial state
+    if (localStorage.getItem('sidebarCollapsed') === 'true') {
+        leftSidebarEl.classList.add('icon-only');
+        if (collapseIcon) collapseIcon.textContent = 'keyboard_double_arrow_right';
+    }
+}
+
+// Polls & Q&A Logic
+const showCreatePollBtn = document.getElementById('showCreatePollBtn');
+const pollEmptyState = document.getElementById('pollEmptyState');
+const pollCreateSection = document.getElementById('pollCreateSection');
+
+if (showCreatePollBtn && pollEmptyState && pollCreateSection) {
+    showCreatePollBtn.addEventListener('click', () => {
+        pollEmptyState.style.display = 'none';
+        pollCreateSection.style.display = 'block';
+    });
+}
+
+// Tab Switching
+const tabPolls = document.getElementById('tabPolls');
+const tabQA = document.getElementById('tabQA');
+const tabContentPolls = document.getElementById('tabContentPolls');
+const tabContentQA = document.getElementById('tabContentQA');
+
+if (tabPolls && tabQA && tabContentPolls && tabContentQA) {
+    tabPolls.addEventListener('click', () => {
+        tabPolls.classList.add('active');
+        tabQA.classList.remove('active');
+        tabContentPolls.style.display = 'block';
+        tabContentQA.style.display = 'none';
+    });
+    tabQA.addEventListener('click', () => {
+        tabQA.classList.add('active');
+        tabPolls.classList.remove('active');
+        tabContentQA.style.display = 'block';
+        tabContentPolls.style.display = 'none';
+    });
 }

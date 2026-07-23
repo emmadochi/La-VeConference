@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "563333021985-64nvrh1mvbac09r9eipphve6b2e050dd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "org.lifechangerstouch.lavie",
+            "certificate_hash": "61162ed6fb0171f2cdd75e0c6553e4df50e9c24d"
+          }
+        },
+        {
           "client_id": "563333021985-nbrjkql6t8evhd7i47lf8s7ie4khjdi6.apps.googleusercontent.com",
           "client_type": 3
         }

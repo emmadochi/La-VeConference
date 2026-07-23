@@ -63,7 +63,9 @@ class _LoginScreenState extends State<LoginScreen> {
       final GoogleSignInAccount googleUser = await GoogleSignIn.instance.authenticate();
 
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
-      final GoogleSignInClientAuthorization? clientAuth = await googleUser.authorizationClient.authorizationForScopes([]);
+      final GoogleSignInClientAuthorization? clientAuth = await googleUser.authorizationClient.authorizationForScopes([
+        'https://www.googleapis.com/auth/calendar.events'
+      ]);
 
       final AuthCredential credential = GoogleAuthProvider.credential(
         accessToken: clientAuth?.accessToken,
@@ -79,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
     } on GoogleSignInException catch (e) {
-      if (e.code == 'sign_in_canceled' || e.code == 'canceled') {
+      if (e.code == 'sign_in_canceled' || e.code == 'canceled' || e.code == 'GoogleSignInExceptionCode.canceled' || e.toString().toLowerCase().contains('cancel')) {
         return;
       }
       setState(() {

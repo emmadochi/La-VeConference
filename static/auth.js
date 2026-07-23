@@ -96,7 +96,17 @@ if (googleAuthBtn) {
             googleAuthBtn.disabled = true;
             authError.textContent = "";
             const provider = new fbFunctions.GoogleAuthProvider();
-            await fbFunctions.signInWithPopup(auth, provider);
+            provider.addScope('https://www.googleapis.com/auth/calendar.events');
+            
+            const result = await fbFunctions.signInWithPopup(auth, provider);
+            
+            // Get the Google Access Token to use with the Calendar API
+            const credential = fbFunctions.GoogleAuthProvider.credentialFromResult(result);
+            if (credential && credential.accessToken) {
+                // Store temporarily in localStorage to be used by the scheduling logic
+                localStorage.setItem('google_calendar_token', credential.accessToken);
+            }
+            
             authModal.style.display = "none";
         } catch (error) {
             authError.textContent = error.message;

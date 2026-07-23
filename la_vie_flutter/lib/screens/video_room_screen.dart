@@ -1,10 +1,16 @@
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:simple_pip_mode/simple_pip.dart';
+import 'package:simple_pip_mode/pip_widget.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../api_service.dart';
 
 class ChatMessage {
@@ -43,8 +49,17 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   late bool _isVideoOff;
   bool _isScreenSharing = false;
   bool _isRecording = false;
+  bool _isDataSaverMode = false;
+  Map<String, dynamic>? _activePoll;
+  List<Map<String, dynamic>> _qaQuestions = [];
+  bool _showQaPopup = false;
+  Map<String, ConnectionQuality> _connectionQualities = {};
   String? _egressId;
   Participant? _pinnedParticipant;
+
+  Timer? _networkPoorTimer;
+  DateTime? _networkPopupSnoozedUntil;
+  bool _isNetworkPopupShowing = false;
 
   // PHASE D: Active Speaker tracking
   /// The identity of the participant who is currently the loudest speaker.
@@ -70,6 +85,19 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
 
   Future<void> _connectToRoom() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final muteMicDefault = prefs.getBool('muteMicDefault') ?? false;
+      final offCameraDefault = prefs.getBool('offCameraDefault') ?? false;
+      final dataSaverMode = prefs.getBool('dataSaverMode') ?? false;
+
+      if (mounted) {
+        setState(() {
+          if (muteMicDefault) _isMuted = true;
+          if (offCameraDefault) _isVideoOff = true;
+          _isDataSaverMode = dataSaverMode;
+        });
+      }
+
       String actualRoomId = widget.roomName;
       String? e2eeKey;
 
@@ -78,7 +106,6 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         actualRoomId = parts[0];
         e2eeKey = parts[1];
       } else {
-        final prefs = await SharedPreferences.getInstance();
         e2eeKey = prefs.getString('e2ee_$actualRoomId');
       }
 
@@ -111,7 +138,34 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
           return;
         }
 
-        if (event is DataReceivedEvent) {
+          if (event is ParticipantConnectionQualityUpdatedEvent) {
+            if (mounted) {
+              setState(() {
+                _connectionQualities[event.participant.identity] = event.connectionQuality;
+              });
+              
+              if (event.participant == _room.localParticipant) {
+                if (event.connectionQuality == ConnectionQuality.poor || event.connectionQuality == ConnectionQuality.lost) {
+                  if (!_isVideoOff && !_isNetworkPopupShowing) {
+                    if (_networkPopupSnoozedUntil == null || DateTime.now().isAfter(_networkPopupSnoozedUntil!)) {
+                      if (_networkPoorTimer == null || !_networkPoorTimer!.isActive) {
+                        _networkPoorTimer = Timer(const Duration(seconds: 7), () {
+                          if (mounted && !_isVideoOff && !_isNetworkPopupShowing) {
+                            _showPoorNetworkDialog();
+                          }
+                        });
+                      }
+                    }
+                  }
+                } else if (event.connectionQuality == ConnectionQuality.excellent || event.connectionQuality == ConnectionQuality.good) {
+                  _networkPoorTimer?.cancel();
+                }
+              }
+            }
+            return;
+          }
+          
+          if (event is DataReceivedEvent) {
           final decoded = utf8.decode(event.data);
 
           if (decoded == '__MUTE_ALL__') {
@@ -165,6 +219,58 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                       }
                     });
                   }
+                }
+                return;
+              } else if (data['type'] == 'whiteboard_toggle') {
+                if (data['state'] == true) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(' opened the whiteboard. Desktop users can view it.', style: const TextStyle(color: Colors.white))));
+                  }
+                }
+                return;
+              } else if (data['type'] == 'poll_launch') {
+                if (mounted) {
+                  setState(() {
+                    _activePoll = data['poll'];
+                  });
+                  _showPollBottomSheet();
+                }
+                return;
+              } else if (data['type'] == 'poll_vote' || data['type'] == 'poll_end') {
+                if (mounted) {
+                  setState(() {
+                    _activePoll = null;
+                  });
+                  if (Navigator.canPop(context)) Navigator.pop(context);
+                }
+                return;
+              } else if (data['type'] == 'qa_question') {
+                if (mounted) {
+                  setState(() {
+                    _qaQuestions.insert(0, data['question']);
+                    _showQaPopup = true;
+                  });
+                }
+                return;
+              } else if (data['type'] == 'qa_upvote') {
+                if (mounted) {
+                  setState(() {
+                    try {
+                      final q = _qaQuestions.firstWhere((q) => q['id'] == data['questionId']);
+                      q['upvotes'] = (q['upvotes'] ?? 0) + 1;
+                    } catch (e) {}
+                  });
+                }
+                return;
+              } else if (data['type'] == 'qa_answered') {
+                if (mounted) {
+                  setState(() {
+                    try {
+                      final q = _qaQuestions.firstWhere((q) => q['id'] == data['questionId']);
+                      q['answered'] = true;
+                      _showQaPopup = false;
+                    } catch (e) {}
+                  });
                 }
                 return;
               } else if (data['type'] == 'chat') {
@@ -249,6 +355,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
 
   @override
   void dispose() {
+    _networkPoorTimer?.cancel();
     _chatController.dispose();
     _messagesNotifier.dispose();
     _listener.dispose();
@@ -365,7 +472,11 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   }
 
   void _endCall() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
     if (!widget.isHost) {
+      if (uid != null) {
+        FirebaseFirestore.instance.collection('users').doc(uid).update({'active_room': ''});
+      }
       Navigator.pop(context);
       return;
     }
@@ -392,6 +503,9 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             TextButton(
               onPressed: () {
                 Navigator.pop(context); // close dialog
+                if (uid != null) {
+                  FirebaseFirestore.instance.collection('users').doc(uid).update({'active_room': ''});
+                }
                 Navigator.pop(context); // close meeting
               },
               child: const Text('Leave Meeting', style: TextStyle(color: Colors.white70)),
@@ -502,6 +616,62 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         }
       }
     }
+  }
+
+  void _showPoorNetworkDialog() {
+    setState(() {
+      _isNetworkPopupShowing = true;
+    });
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF070B19),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+          ),
+          title: const Text('Unstable Network', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: const Text(
+            'Your network connection is unstable. Would you like to turn off your video to improve call quality?',
+            style: TextStyle(color: Colors.white54),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                if (mounted) {
+                  setState(() {
+                    _isNetworkPopupShowing = false;
+                    _networkPopupSnoozedUntil = DateTime.now().add(const Duration(minutes: 2));
+                  });
+                }
+              },
+              child: const Text('Keep Video On', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                if (mounted) {
+                  setState(() {
+                    _isNetworkPopupShowing = false;
+                  });
+                  _toggleCamera();
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF5C00FF),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Turn Off Video', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showReactionsBottomSheet() {
@@ -623,10 +793,20 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                     },
                   ),
                   _buildOptionTile(
+                    icon: Icons.share,
+                    title: 'Share Meeting Link',
+                    onTap: () {
+                      Navigator.pop(context);
+                      final url = 'https://la-vie.lifechangerstouch.org/static/index.html?room=${widget.roomName}';
+                      Share.share('Join my La-Vie Premium meeting via this link: $url');
+                    },
+                  ),
+                  _buildOptionTile(
                     icon: Icons.settings_outlined,
                     title: 'Settings',
                     onTap: () {
                       Navigator.pop(context);
+                      _showSettingsDialog();
                     },
                   ),
                   const SizedBox(height: 16),
@@ -635,6 +815,124 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             ),
             ),
           ),
+        );
+      },
+    );
+  }
+
+  void _showSettingsDialog() {
+    String localVideoQuality = 'Adaptive'; // Default value for dialog
+    bool localNoiseCancellation = true; // Default value for dialog
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF070B19),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.settings, color: Color(0xFF00E5FF)),
+                  SizedBox(width: 8),
+                  Text('Room Settings', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.videocam, color: Colors.white70),
+                    title: const Text('Video Quality', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(localVideoQuality, style: const TextStyle(color: Colors.white54)),
+                    trailing: const Icon(Icons.arrow_drop_down, color: Colors.white70),
+                    onTap: () {
+                      showModalBottomSheet(
+                        context: context,
+                        backgroundColor: const Color(0xFF070B19),
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                        ),
+                        builder: (context) {
+                          return SafeArea(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: ['Adaptive', '720p', '1080p'].map((quality) {
+                                return ListTile(
+                                  title: Text(quality, style: const TextStyle(color: Colors.white)),
+                                  trailing: localVideoQuality == quality
+                                      ? const Icon(Icons.check, color: Color(0xFF00E5FF))
+                                      : null,
+                                  onTap: () {
+                                    setState(() => localVideoQuality = quality);
+                                    Navigator.pop(context);
+                                  },
+                                );
+                              }).toList(),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.security, color: Colors.white70),
+                    title: const Text('End-to-End Encryption', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Enabled', style: TextStyle(color: Colors.green)),
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('E2EE is locked on for all Premium meetings.')),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.mic, color: Colors.white70),
+                    title: const Text('Noise Cancellation', style: TextStyle(color: Colors.white)),
+                    trailing: Switch(
+                      value: localNoiseCancellation,
+                      onChanged: (val) => setState(() => localNoiseCancellation = val),
+                      activeColor: const Color(0xFF00E5FF),
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.data_saver_on, color: Colors.white70),
+                    title: const Text('Data Saver Mode', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Disables incoming video', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Switch(
+                      value: _isDataSaverMode,
+                      onChanged: (val) {
+                        setState(() {
+                          _isDataSaverMode = val;
+                        });
+                        this.setState(() {}); // Update the main screen too
+                        if (val && !_isVideoOff) {
+                          _toggleCamera(); // Turn off local camera automatically
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Data Saver enabled. Camera turned off.')),
+                          );
+                        }
+                      },
+                      activeColor: const Color(0xFF00E5FF),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close', style: TextStyle(color: Color(0xFF00E5FF))),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -822,6 +1120,182 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   }
 
   @override
+  Widget _buildPipVideo() {
+    final allParticipants = <Participant>[
+      if (_room.localParticipant != null) _room.localParticipant!,
+      ..._room.remoteParticipants.values,
+    ];
+
+    Participant? primary = _pinnedParticipant;
+    if (primary == null || !allParticipants.contains(primary)) {
+      if (_activeSpeakerIdentity != null) {
+        primary = allParticipants.where((p) => p.identity == _activeSpeakerIdentity).firstOrNull;
+      }
+      primary ??= allParticipants.where((p) => p != _room.localParticipant).firstOrNull;
+      primary ??= _room.localParticipant;
+    }
+
+    if (primary == null) return const Center(child: CircularProgressIndicator());
+
+    final videoTrack = primary.videoTrackPublications.firstOrNull?.track;
+    if (videoTrack != null && !_isDataSaverMode) {
+      return VideoTrackRenderer(videoTrack as VideoTrack);
+    }
+    return Container(
+      color: Colors.black,
+      child: const Center(
+        child: Icon(Icons.person, color: Colors.white, size: 50),
+      ),
+    );
+  }
+
+  void _showPollBottomSheet() {
+    if (_activePoll == null) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2C),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Poll', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Text(_activePoll!['question'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(height: 20),
+              ...((_activePoll!['options'] as List<dynamic>? ?? []).asMap().entries.map((entry) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white10,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                    ),
+                    onPressed: () {
+                      final payload = jsonEncode({'type': 'poll_vote', 'optionIdx': entry.key});
+                      _room.localParticipant?.publishData(utf8.encode(payload), topic: 'chat');
+                      Navigator.pop(context);
+                      setState(() { _activePoll = null; });
+                    },
+                    child: Text(entry.value.toString()),
+                  ),
+                );
+              }).toList()),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showQaBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2C),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Q&A', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  if (_qaQuestions.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(20.0),
+                      child: Text('No questions yet.', style: TextStyle(color: Colors.white54)),
+                    ),
+                  ..._qaQuestions.map((q) {
+                    return ListTile(
+                      title: Text(q['text'] ?? '', style: const TextStyle(color: Colors.white)),
+                      subtitle: Text(q['author'] ?? 'Anonymous', style: const TextStyle(color: Colors.white54)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('${q['upvotes'] ?? 0}', style: const TextStyle(color: Colors.white)),
+                          IconButton(
+                            icon: const Icon(Icons.thumb_up, color: Color(0xFF00E5FF)),
+                            onPressed: () {
+                              final payload = jsonEncode({'type': 'qa_upvote', 'questionId': q['id']});
+                              _room.localParticipant?.publishData(utf8.encode(payload), topic: 'chat');
+                              setModalState(() {
+                                q['upvotes'] = (q['upvotes'] ?? 0) + 1;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  const SizedBox(height: 10),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Close'),
+                  )
+                ],
+              ),
+            );
+          }
+        );
+      },
+    );
+  }
+
+  Widget _buildQaPopup() {
+    if (!_showQaPopup || _qaQuestions.isEmpty) return const SizedBox();
+    final latestQ = _qaQuestions.first;
+    return Positioned(
+      top: 100,
+      left: 20,
+      right: 20,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E2C).withOpacity(0.9),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF00E5FF), width: 1),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.question_answer, color: Color(0xFF00E5FF)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('New Q&A: ${latestQ['author'] ?? 'Anonymous'}', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    Text(latestQ['text'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white54),
+                onPressed: () {
+                  setState(() {
+                    _showQaPopup = false;
+                  });
+                },
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
+
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Scaffold(
@@ -842,9 +1316,29 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF070B19),
-      body: Stack(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        try {
+          bool isPipSupported = await SimplePip.isPipAvailable;
+          if (isPipSupported) {
+            SimplePip().enterPipMode(aspectRatio: const (16, 9));
+          } else {
+            if (context.mounted) Navigator.of(context).pop();
+          }
+        } catch (e) {
+          if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      child: PipWidget(
+        pipChild: Scaffold(
+          backgroundColor: const Color(0xFF070B19),
+          body: _buildPipVideo(),
+        ),
+      child: Scaffold(
+        backgroundColor: const Color(0xFF070B19),
+        body: Stack(
         children: [
           // Background Glows
           Positioned(
@@ -911,7 +1405,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                               return PopupMenuItem<String>(
                                 value: p.identity,
                                 child: Text(
-                                  p.identity + (isLocal ? ' (You)' : ''),
+                                  (p.name.isNotEmpty ? p.name : p.identity) + (isLocal ? ' (You)' : ''),
                                   style: const TextStyle(color: Colors.white),
                                 ),
                               );
@@ -966,16 +1460,33 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                       ),
                       Align(
                         alignment: Alignment.centerRight,
-                        child: GestureDetector(
-                          onTap: _flipCamera,
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.1),
-                              shape: BoxShape.circle,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: () => SimplePip().enterPipMode(),
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.picture_in_picture_alt, color: Color(0xFF00E5FF), size: 24),
+                              ),
                             ),
-                            child: const Icon(Icons.flip_camera_ios, color: Color(0xFF00E5FF), size: 24),
-                          ),
+                            GestureDetector(
+                              onTap: _flipCamera,
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.flip_camera_ios, color: Color(0xFF00E5FF), size: 24),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -987,35 +1498,6 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20.0),
                     child: _buildVideoGrid(),
-                  ),
-                ),
-                
-                // Status Indicators
-                Padding(
-                  padding: const EdgeInsets.only(top: 16.0, bottom: 20.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Icon(Icons.signal_cellular_4_bar, color: Color(0xFF00E5FF), size: 16),
-                      const SizedBox(width: 4),
-                      const Text(
-                        '5',
-                        style: TextStyle(
-                          color: Color(0xFF00E5FF),
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      )
-                    ],
                   ),
                 ),
                 
@@ -1198,9 +1680,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
               ],
             ),
           ),
+          
+          // Q&A Popup Overlay
+          _buildQaPopup(),
         ],
       ),
-    );
+      ),
+    ));
   }
 
   /// PHASE D: isPrimary controls whether this tile is the spotlighted large tile.
@@ -1213,7 +1699,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     final isMuted = trackPub?.muted ?? true;
     final isLocal = p == _room.localParticipant;
     final forceAvatar = isLocal && _isVideoOff;
-    final showAvatar = forceAvatar || isMuted || track == null;
+    final showAvatar = forceAvatar || isMuted || track == null || (_isDataSaverMode && !isLocal);
     final location = isLocal ? 'Seattle, WA' : 'London, UK'; // Mock locations based on UI
     final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
     
