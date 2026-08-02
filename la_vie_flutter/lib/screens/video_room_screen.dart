@@ -513,12 +513,37 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             ElevatedButton(
               onPressed: () async {
                 Navigator.pop(context); // close dialog
-                final data = utf8.encode('__END_MEETING__');
+                final roomId = widget.roomName;
+                final uid = FirebaseAuth.instance.currentUser?.uid;
+
+                // 1. Broadcast __END_MEETING__ data packet over LiveKit
                 try {
+                  final data = utf8.encode('__END_MEETING__');
                   await _room.localParticipant?.publishData(data);
                 } catch (e) {
                   debugPrint('Failed to broadcast end meeting: $e');
                 }
+
+                // 2. Call ApiService.endMeeting(roomId) -> deletes LiveKit room & clears active_room in Firestore
+                try {
+                  await ApiService.endMeeting(roomId);
+                } catch (e) {
+                  debugPrint('Failed to end meeting via API: $e');
+                }
+
+                // 3. Clear user active_room in Firestore
+                if (uid != null) {
+                  try {
+                    await FirebaseFirestore.instance.collection('users').doc(uid).set({'active_room': ''}, SetOptions(merge: true));
+                  } catch (e) {
+                    debugPrint('Failed to clear active_room: $e');
+                  }
+                }
+
+                // 4. Disconnect room and pop screen
+                try {
+                  await _room.disconnect();
+                } catch (_) {}
                 if (mounted) {
                   Navigator.pop(context); // close meeting
                 }

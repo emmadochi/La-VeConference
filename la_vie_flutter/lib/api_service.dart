@@ -81,5 +81,23 @@ class ApiService {
       return false;
     }
   }
+
+  static Future<bool> endMeeting(String roomName) async {
+    try {
+      final authToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/end_meeting'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({'room_id': roomName}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Failed to end meeting via API: $e');
+      return false;
+    }
+  }
 }
 

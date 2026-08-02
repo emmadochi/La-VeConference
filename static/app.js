@@ -415,6 +415,12 @@ async function startCall(roomId) {
                 return;
             }
 
+            if (strData === '__END_MEETING__') {
+                showToast('The host has ended the meeting for everyone.', true);
+                leaveCall();
+                return;
+            }
+
             let data;
             try { data = JSON.parse(strData); }
             catch (e) { data = { type: 'chat', text: strData, sender: participant ? participant.name : 'Unknown' }; }

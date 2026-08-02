@@ -343,17 +343,51 @@ async def stop_recording(request: Request):
 
 @app.post("/api/end_meeting")
 async def end_meeting(request: Request):
-    await verify_admin(request)
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    token = auth_header.split("Bearer ")[1]
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get("uid")
+        email = decoded_token.get("email", "")
+    except Exception as e:
+        logger.error(f"End meeting token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
     data = await request.json()
     room_id = data.get("room_id")
-    
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    logger.info(f"End meeting request for room {room_id} by user {uid} ({email})")
+
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
+        # Delete room on LiveKit server - this terminates WebRTC and disconnects ALL participants!
         await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_id))
+        logger.info(f"Successfully deleted LiveKit room {room_id}")
+
+        # Clear active_room for all users currently marked in this room in Firestore
+        if db:
+            try:
+                users_in_room = db.collection("users").where("active_room", "==", room_id).get()
+                for udoc in users_in_room:
+                    udoc.reference.set({"active_room": ""}, merge=True)
+                logger.info(f"Cleared active_room in Firestore for users in room {room_id}")
+            except Exception as fe:
+                logger.warning(f"Failed to clear active_room in Firestore: {fe}")
+
         return {"status": "success"}
     except Exception as e:
-        logger.error(f"Failed to end meeting: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to end meeting {room_id}: {e}")
+        if db and uid:
+            try:
+                db.collection("users").document(uid).set({"active_room": ""}, merge=True)
+            except Exception:
+                pass
+        return {"status": "success", "warning": str(e)}
     finally:
         await lkapi.aclose()
 
