@@ -27,7 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final displayName = user?.displayName ?? 'Premium User';
     
-    final prefs = await showPreJoinDialog(context);
+    final prefs = await showPreJoinDialog(context, isCreating: true);
     if (prefs == null) return;
 
     if (!mounted) return;

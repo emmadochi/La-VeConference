@@ -28,7 +28,8 @@ class _LandingScreenState extends State<LandingScreen> {
       room = room.split('?').first;
     }
     
-    final prefs = await showPreJoinDialog(context);
+    final bool isCreating = _roomController.text.trim().isEmpty;
+    final prefs = await showPreJoinDialog(context, isCreating: isCreating);
     if (prefs == null) return;
     if (!mounted) return;
 

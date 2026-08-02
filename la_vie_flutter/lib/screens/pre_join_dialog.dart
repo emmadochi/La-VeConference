@@ -1,17 +1,35 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
-Future<Map<String, bool>?> showPreJoinDialog(BuildContext context) async {
+Future<Map<String, bool>?> showPreJoinDialog(
+  BuildContext context, {
+  bool isCreating = false,
+  String? title,
+  String? actionText,
+}) async {
   return showDialog<Map<String, bool>>(
     context: context,
     builder: (context) {
-      return const PreJoinDialog();
+      return PreJoinDialog(
+        isCreating: isCreating,
+        title: title,
+        actionText: actionText,
+      );
     },
   );
 }
 
 class PreJoinDialog extends StatefulWidget {
-  const PreJoinDialog({Key? key}) : super(key: key);
+  final bool isCreating;
+  final String? title;
+  final String? actionText;
+
+  const PreJoinDialog({
+    Key? key,
+    this.isCreating = false,
+    this.title,
+    this.actionText,
+  }) : super(key: key);
 
   @override
   State<PreJoinDialog> createState() => _PreJoinDialogState();
@@ -23,6 +41,9 @@ class _PreJoinDialogState extends State<PreJoinDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final String displayTitle = widget.title ?? (widget.isCreating ? 'Ready to Create?' : 'Ready to Join?');
+    final String displayAction = widget.actionText ?? (widget.isCreating ? 'Create Now' : 'Join Now');
+
     return Center(
       child: Material(
         color: Colors.transparent,
@@ -48,9 +69,9 @@ class _PreJoinDialogState extends State<PreJoinDialog> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Ready to Join?',
-                    style: TextStyle(
+                  Text(
+                    displayTitle,
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
@@ -118,7 +139,7 @@ class _PreJoinDialogState extends State<PreJoinDialog> {
                             elevation: 8,
                             shadowColor: const Color(0xFF00E5FF).withOpacity(0.5),
                           ),
-                          child: const Text('Join Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                          child: Text(displayAction, style: const TextStyle(fontWeight: FontWeight.bold)),
                         ),
                       ),
                     ],
