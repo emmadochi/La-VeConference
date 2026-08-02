@@ -2810,3 +2810,57 @@ body.is-native-app .hero-section h1 {
     font-size: 1.1rem;
 }
 
+/* Features Showcase & Badges */
+.badge-new {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(92, 0, 255, 0.3));
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
+}
+
+.features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+    margin-top: 30px;
+}
+
+.feature-card {
+    transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    padding: 24px;
+    border-radius: 20px;
+    text-align: left;
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+    border-color: rgba(0, 229, 255, 0.5);
+    box-shadow: 0 10px 30px rgba(0, 229, 255, 0.15);
+}
+
+.feature-card .feature-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 14px;
+    background: rgba(0, 229, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #00e5ff;
+    margin-bottom: 16px;
+}
+
+.feature-card .feature-icon .material-symbols-outlined {
+    font-size: 28px;
+}
+
