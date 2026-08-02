@@ -98,6 +98,28 @@ class ApiService {
       print('Failed to end meeting via API: $e');
       return false;
     }
+  static Future<Map<String, String>?> createIngress(String roomName) async {
+    try {
+      final authToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/create_ingress'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({'room_id': roomName}),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {
+          'rtmp_url': data['rtmp_url'] ?? '',
+          'stream_key': data['stream_key'] ?? '',
+        };
+      }
+    } catch (e) {
+      print('Failed to create ingress: $e');
+    }
+    return null;
   }
 }
 

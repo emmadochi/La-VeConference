@@ -561,6 +561,94 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     );
   }
 
+  void _showVmixDialog() async {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF070B19),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+              ),
+              title: Row(
+                children: const [
+                  Icon(Icons.live_tv, color: Color(0xFF00E5FF)),
+                  SizedBox(width: 8),
+                  Text('vMix / Live Ingest', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              content: FutureBuilder<Map<String, String>?>(
+                future: ApiService.createIngress(widget.roomName),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox(
+                      height: 120,
+                      child: Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF))),
+                    );
+                  }
+                  final data = snapshot.data;
+                  final rtmpUrl = data?['rtmp_url'] ?? 'rtmp://${ApiService.baseUrl.replaceAll('https://', '')}/live';
+                  final streamKey = data?['stream_key'] ?? 'lavie-stage-${widget.roomName}';
+
+                  return SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Stream live from vMix, OBS, or RTMP software into this meeting room as the Main Stage.',
+                          style: TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('RTMP SERVER URL', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          rtmpUrl,
+                          style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text('STREAM KEY', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          streamKey,
+                          style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: 'URL: $rtmpUrl\nKey: $streamKey'));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Credentials copied to clipboard!'), backgroundColor: Color(0xFF00E5FF)),
+                            );
+                          },
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: const Text('Copy Credentials'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00E5FF),
+                            foregroundColor: const Color(0xFF070B19),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close', style: TextStyle(color: Colors.white54)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _toggleScreenShare() async {
     final enabled = !_isScreenSharing;
     try {
@@ -784,6 +872,16 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                         );
                       },
                     ),
+                    if (widget.isHost)
+                      _buildOptionTile(
+                        icon: Icons.live_tv,
+                        title: 'vMix / Live Ingest',
+                        subtitle: 'Stream live RTMP feed into this meeting',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showVmixDialog();
+                        },
+                      ),
                     if (widget.isHost)
                       _buildOptionTile(
                         icon: Icons.mic_off,

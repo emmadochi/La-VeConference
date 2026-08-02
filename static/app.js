@@ -272,6 +272,9 @@ async function startCall(roomId) {
         const toggleRecordBtn = document.getElementById('toggleRecordBtn');
         if (isAdmin && toggleRecordBtn) { toggleRecordBtn.style.display = 'flex'; }
 
+        const toggleVmixBtn = document.getElementById('toggleVmixBtn');
+        if (isAdmin && toggleVmixBtn) { toggleVmixBtn.style.display = 'flex'; }
+
         const muteAllBtn = document.getElementById('muteAllBtn');
         if (isAdmin && muteAllBtn) {
             muteAllBtn.style.display = 'flex';
@@ -371,6 +374,10 @@ async function startCall(roomId) {
 
         currentRoom.on(RoomEvent.ParticipantConnected, (participant) => {
             appendSystemMessage(`${participant.name || 'Anonymous'} joined the room.`);
+            if (participant.identity === 'vmix_stage_feed') {
+                showToast('Live vMix broadcast stage started!', false);
+                spotlightParticipant(participant.identity);
+            }
             _updateParticipantOrder();
             renderParticipants();
         });
@@ -829,6 +836,71 @@ if (endMeetingForAllBtn) endMeetingForAllBtn.addEventListener('click', async () 
         showToast("Failed to end meeting.", true);
     }
 });
+
+// --- vMix Ingest Modal Handler ---
+const toggleVmixBtn = document.getElementById('toggleVmixBtn');
+const vmixModal = document.getElementById('vmixModal');
+const closeVmixModalBtn = document.getElementById('closeVmixModalBtn');
+const copyVmixUrlBtn = document.getElementById('copyVmixUrlBtn');
+const copyVmixKeyBtn = document.getElementById('copyVmixKeyBtn');
+
+if (toggleVmixBtn) {
+    toggleVmixBtn.addEventListener('click', async () => {
+        if (!currentRoom) return;
+        if (vmixModal) vmixModal.style.display = 'flex';
+        const moreOptions = document.getElementById('moreOptionsMenu');
+        if (moreOptions) moreOptions.style.display = 'none';
+
+        const rtmpInput = document.getElementById('vmixRtmpUrl');
+        const keyInput = document.getElementById('vmixStreamKey');
+        if (rtmpInput) rtmpInput.value = 'Fetching credentials...';
+        if (keyInput) keyInput.value = 'Fetching credentials...';
+
+        try {
+            const idToken = await getAuthToken();
+            const res = await fetch('/api/create_ingress', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({ room_id: currentRoom.name })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                if (rtmpInput) rtmpInput.value = data.rtmp_url;
+                if (keyInput) keyInput.value = data.stream_key;
+            } else {
+                showToast("Failed to fetch vMix credentials.", true);
+            }
+        } catch (e) {
+            console.error("Error fetching vMix ingress credentials:", e);
+            showToast("Failed to connect to vMix Ingress service.", true);
+        }
+    });
+}
+
+if (closeVmixModalBtn) {
+    closeVmixModalBtn.addEventListener('click', () => {
+        if (vmixModal) vmixModal.style.display = 'none';
+    });
+}
+
+if (copyVmixUrlBtn) {
+    copyVmixUrlBtn.addEventListener('click', () => {
+        const val = document.getElementById('vmixRtmpUrl').value;
+        navigator.clipboard.writeText(val);
+        showToast("RTMP Server URL copied to clipboard!");
+    });
+}
+
+if (copyVmixKeyBtn) {
+    copyVmixKeyBtn.addEventListener('click', () => {
+        const val = document.getElementById('vmixStreamKey').value;
+        navigator.clipboard.writeText(val);
+        showToast("Stream Key copied to clipboard!");
+    });
+}
 
 // --- Media Controls ---
 if (toggleMicBtn) {

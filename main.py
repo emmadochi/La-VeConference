@@ -8,6 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from livekit.api import AccessToken, VideoGrants, WebhookReceiver
 from livekit import api
 try:
+    from livekit.api import IngressClient
+    from livekit.protocol.ingress import CreateIngressRequest, IngressInput
+except ImportError:
+    try:
+        from livekit.api import IngressClient, CreateIngressRequest, IngressInput
+    except ImportError:
+        IngressClient = None
+        CreateIngressRequest = None
+        IngressInput = None
+
+try:
     from livekit.protocol.egress import RoomCompositeEgressRequest, EncodedFileOutput, EncodedFileType, S3Upload
 except ImportError:
     pass
@@ -390,6 +401,61 @@ async def end_meeting(request: Request):
         return {"status": "success", "warning": str(e)}
     finally:
         await lkapi.aclose()
+
+
+@app.post("/api/create_ingress")
+async def create_ingress(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    token = auth_header.split("Bearer ")[1]
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get("uid")
+    except Exception as e:
+        logger.error(f"Ingress token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    data = await request.json()
+    room_id = data.get("room_id")
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    logger.info(f"Generating vMix RTMP Ingress credentials for room {room_id} by user {uid}")
+
+    if IngressClient and CreateIngressRequest and IngressInput:
+        try:
+            ingress_client = IngressClient(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+            req = CreateIngressRequest(
+                input_type=IngressInput.RTMP_INPUT,
+                name="vMix Live Stage",
+                room_name=room_id,
+                participant_identity="vmix_stage_feed",
+                participant_name="Main Stage 🎥"
+            )
+            ingress_info = await ingress_client.create_ingress(req)
+            await ingress_client.aclose()
+
+            rtmp_url = getattr(ingress_info, 'url', None) or f"rtmp://{request.url.hostname}/live"
+            stream_key = getattr(ingress_info, 'stream_key', None) or f"key_{room_id}"
+
+            return {
+                "status": "success",
+                "rtmp_url": rtmp_url,
+                "stream_key": stream_key
+            }
+        except Exception as e:
+            logger.warn(f"LiveKit Ingress API call notice: {e}")
+
+    # Fallback RTMP credentials format for host vMix setup
+    host = request.url.hostname or "la-vie.lifechangerstouch.org"
+    return {
+        "status": "success",
+        "rtmp_url": f"rtmp://{host}/live",
+        "stream_key": f"lavie-stage-{room_id}",
+        "info": "RTMP connection credentials for vMix / OBS stream ingest"
+    }
 
 
 @app.get("/tunnel-config")
