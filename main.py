@@ -47,11 +47,50 @@ except Exception as e:
 
 app = FastAPI()
 
+# Security HTTP Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+# Rate Limiting Middleware for API & Token endpoints
+RATE_LIMIT_STORE = {}
+MAX_REQUESTS_PER_MINUTE = 60
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") or path.startswith("/token/"):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        user_requests = [t for t in RATE_LIMIT_STORE.get(client_ip, []) if now - t < 60]
+        if len(user_requests) >= MAX_REQUESTS_PER_MINUTE:
+            logger.warning(f"Rate limit exceeded for IP: {client_ip} on path {path}")
+            return Response(
+                content='{"detail":"Rate limit exceeded. Please try again in a minute."}',
+                status_code=429,
+                media_type="application/json"
+            )
+        user_requests.append(now)
+        RATE_LIMIT_STORE[client_ip] = user_requests
+
+    return await call_next(request)
+
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+default_origins = ["https://la-vie.lifechangerstouch.org", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:8000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins if allowed_origins else default_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -222,6 +261,7 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
             .with_identity(peer_id)
             .with_name(name)
             .with_grants(grant)
+            .with_ttl(timedelta(hours=2))
             .to_jwt()
         )
         
