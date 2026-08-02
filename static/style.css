@@ -2764,3 +2764,49 @@ body.is-native-app .hero-section h1 {
         display: flex !important;
     }
 }
+
+/* Camera Switcher Dropdown & Options */
+.camera-list-sub-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    margin: 4px 0 8px 0;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.camera-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.825rem;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s ease;
+    width: 100%;
+}
+
+.camera-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.camera-item.active {
+    background: rgba(0, 212, 255, 0.15);
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.camera-item .material-symbols-outlined {
+    font-size: 1.1rem;
+}
+

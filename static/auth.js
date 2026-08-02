@@ -131,6 +131,15 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
         userSection.style.display = "flex";
         navUserName.textContent = user.displayName || user.email.split("@")[0];
         
+        const adminBtn = document.getElementById("adminBtn");
+        if (adminBtn) {
+            if (user.email === "la-vie@adminnew.com") {
+                adminBtn.style.display = "inline-block";
+            } else {
+                adminBtn.style.display = "none";
+            }
+        }
+        
         // Show auth-required elements
         if (dashboardSection) dashboardSection.style.display = "block";
         if (scheduleMeetingBtn) scheduleMeetingBtn.style.display = "flex";

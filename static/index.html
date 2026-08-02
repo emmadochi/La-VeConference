@@ -29,6 +29,7 @@
                 </div>
                 <div class="user-section" id="userSection" style="display: none;">
                     <span id="navUserName" class="user-name">User</span>
+                    <a href="/admin" id="adminBtn" class="nav-btn" style="text-decoration: none; color: inherit;">Admin</a>
                     <button id="logoutBtn" class="nav-btn">Log Out</button>
                 </div>
             </div>
@@ -384,8 +385,9 @@
                                 <span class="material-symbols-outlined">link</span> Copy Meeting Link
                             </button>
                             <button id="flipCameraBtn" class="dropdown-item flip-cam-btn" style="display: none;">
-                                <span class="material-symbols-outlined">flip_camera_ios</span> Flip Camera
+                                <span class="material-symbols-outlined">cameraswitch</span> <span id="flipCameraBtnText">Switch Camera</span>
                             </button>
+                            <div id="cameraListContainer" class="camera-list-sub-menu" style="display: none;"></div>
                             <button id="muteAllBtn" class="dropdown-item" style="display: none; color: #ef4444;">
                                 <span class="material-symbols-outlined">mic_off</span> Mute All
                             </button>

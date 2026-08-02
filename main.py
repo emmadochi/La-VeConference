@@ -63,6 +63,66 @@ async def get_index():
     with open("static/index.html", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
+@app.get("/admin")
+async def get_admin():
+    with open("static/admin.html", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+@app.get("/api/admin/stats")
+async def get_admin_stats(request: Request):
+    await verify_admin(request)
+    
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+        
+    try:
+        # Get users
+        users_ref = db.collection("users")
+        all_users = users_ref.get()
+        total_users = len(all_users)
+        
+        users_data = []
+        active_rooms = 0
+        for doc in all_users:
+            user_dict = doc.to_dict()
+            if user_dict.get("active_room"):
+                active_rooms += 1
+            users_data.append({
+                "id": doc.id,
+                "email": user_dict.get("email", "Unknown"),
+                "displayName": user_dict.get("displayName", ""),
+                "active_room": user_dict.get("active_room", "")
+            })
+        
+        # Get meetings
+        meetings_ref = db.collection("meetings")
+        all_meetings = meetings_ref.get()
+        total_meetings = len(all_meetings)
+        
+        meetings_data = []
+        for doc in all_meetings:
+            meet_dict = doc.to_dict()
+            meetings_data.append({
+                "id": doc.id,
+                "title": meet_dict.get("title", "Untitled"),
+                "scheduled_time": meet_dict.get("scheduled_time"),
+                "host_id": meet_dict.get("host_id", "")
+            })
+        
+        # Sort by most recent/upcoming (assuming ISO strings for scheduled_time)
+        meetings_data = sorted(meetings_data, key=lambda x: x["scheduled_time"] or "", reverse=True)
+        
+        return {
+            "total_users": total_users,
+            "active_rooms": active_rooms,
+            "total_meetings": total_meetings,
+            "users": users_data,
+            "meetings": meetings_data
+        }
+    except Exception as e:
+        logger.error(f"Error fetching admin stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch stats")
+
 @app.get("/favicon.ico")
 async def favicon():
     from fastapi.responses import Response
@@ -165,7 +225,21 @@ async def verify_admin(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = auth_header.split("Bearer ")[1]
     try:
-        auth.verify_id_token(token)
+        decoded_token = auth.verify_id_token(token)
+        email = decoded_token.get("email", "")
+        uid = decoded_token.get("uid")
+        
+        if email == "la-vie@adminnew.com":
+            return True
+            
+        if uid and db:
+            user_doc = db.collection("users").document(uid).get()
+            if user_doc.exists and user_doc.to_dict().get("isAdmin") == True:
+                return True
+                
+        raise HTTPException(status_code=403, detail="Forbidden: Admin access required")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid token")
 

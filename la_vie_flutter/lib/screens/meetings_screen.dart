@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/notification_service.dart';
+import 'package:share_plus/share_plus.dart';
 
 class MeetingsScreen extends StatelessWidget {
   const MeetingsScreen({Key? key}) : super(key: key);
@@ -660,6 +661,14 @@ class MeetingsScreen extends StatelessWidget {
                       color: const Color(0xFF1E243A),
                       itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
                         const PopupMenuItem<String>(
+                          value: 'share',
+                          child: ListTile(
+                            leading: Icon(Icons.share, color: Colors.white70),
+                            title: Text('Share', style: TextStyle(color: Colors.white)),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem<String>(
                           value: 'edit',
                           child: ListTile(
                             leading: Icon(Icons.edit, color: Colors.white70),
@@ -681,6 +690,9 @@ class MeetingsScreen extends StatelessWidget {
                           _deleteMeeting(context, meeting);
                         } else if (value == 'edit') {
                           _showEditMeetingDialog(context, meeting);
+                        } else if (value == 'share') {
+                          final url = 'https://la-vie.lifechangerstouch.org/static/index.html?room=${meeting.roomId}';
+                          Share.share('Join my La-Vie Premium meeting via this link: $url');
                         }
                       },
                     ),

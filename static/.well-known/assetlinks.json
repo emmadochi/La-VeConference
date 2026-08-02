@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "org.lifechangerstouch.lavie",
+    "sha256_cert_fingerprints": [
+      "1E:8F:96:03:C5:53:6F:5A:D4:22:D5:CB:D2:B4:90:7A:51:AF:61:20:BC:A2:9F:32:2D:AE:AF:BC:35:EA:0A:2E"
+    ]
+  }
+}]

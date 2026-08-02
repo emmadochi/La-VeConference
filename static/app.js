@@ -38,6 +38,10 @@ const mediaControls = document.getElementById('mediaControls');
 const toggleMicBtn = document.getElementById('toggleMicBtn');
 const toggleVideoBtn = document.getElementById('toggleVideoBtn');
 const flipCameraBtn = document.getElementById('flipCameraBtn');
+const flipCameraBtnText = document.getElementById('flipCameraBtnText');
+const cameraListContainer = document.getElementById('cameraListContainer');
+let availableVideoDevices = [];
+let activeCameraDeviceId = null;
 const toggleScreenBtn = document.getElementById('toggleScreenBtn');
 const toggleChatBtn = document.getElementById('navChatBtn') || document.getElementById('toggleChatBtn');
 const togglePeopleBtn = document.getElementById('navPeopleBtn') || document.getElementById('togglePeopleBtn');
@@ -504,6 +508,7 @@ async function startCall(roomId) {
         console.log("Connected to LiveKit!");
 
         await currentRoom.localParticipant.enableCameraAndMicrophone();
+        await updateCameraDevicesList();
 
         try {
             if (supportsBackgroundProcessors()) {
@@ -798,7 +803,6 @@ leaveCallBtn.addEventListener('click', () => {
 const closeLeaveModalBtn = document.getElementById('closeLeaveModalBtn');
 const leaveMeetingOnlyBtn = document.getElementById('leaveMeetingOnlyBtn');
 const endMeetingForAllBtn = document.getElementById('endMeetingForAllBtn');
-
 if (closeLeaveModalBtn) closeLeaveModalBtn.addEventListener('click', () => document.getElementById('leaveModal').style.display = 'none');
 if (leaveMeetingOnlyBtn) leaveMeetingOnlyBtn.addEventListener('click', () => {
     document.getElementById('leaveModal').style.display = 'none';
@@ -816,76 +820,221 @@ if (endMeetingForAllBtn) endMeetingForAllBtn.addEventListener('click', async () 
         document.getElementById('leaveModal').style.display = 'none';
         leaveCall();
     } catch (e) {
-        console.error("Failed to end meeting", e);
         showToast("Failed to end meeting.", true);
     }
 });
 
 // --- Media Controls ---
-toggleMicBtn.addEventListener('click', async () => {
-    if (!currentRoom) return;
-    isMicEnabled = !isMicEnabled;
-    await currentRoom.localParticipant.setMicrophoneEnabled(isMicEnabled);
-    toggleMicBtn.classList.toggle('active', isMicEnabled);
-    const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
-    const text = toggleMicBtn.querySelector('.btn-text');
-    icon.textContent = isMicEnabled ? 'mic' : 'mic_off';
-    text.textContent = isMicEnabled ? 'Mute' : 'Unmute';
-});
+if (toggleMicBtn) {
+    toggleMicBtn.addEventListener('click', async () => {
+        if (!currentRoom) return;
+        isMicEnabled = !isMicEnabled;
+        await currentRoom.localParticipant.setMicrophoneEnabled(isMicEnabled);
+        toggleMicBtn.classList.toggle('active', isMicEnabled);
+        const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
+        const text = toggleMicBtn.querySelector('.btn-text');
+        icon.textContent = isMicEnabled ? 'mic' : 'mic_off';
+        if (text) text.textContent = isMicEnabled ? 'Mute' : 'Unmute';
+    });
+}
 
-toggleVideoBtn.addEventListener('click', async () => {
+if (toggleVideoBtn) {
+    toggleVideoBtn.addEventListener('click', async () => {
+        if (!currentRoom) return;
+        isVideoEnabled = !isVideoEnabled;
+        await currentRoom.localParticipant.setCameraEnabled(isVideoEnabled);
+        toggleVideoBtn.classList.toggle('active', isVideoEnabled);
+        const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
+        const text = toggleVideoBtn.querySelector('.btn-text');
+        icon.textContent = isVideoEnabled ? 'videocam' : 'videocam_off';
+        if (text) text.textContent = isVideoEnabled ? 'Hide' : 'Show';
+        
+        const localWrapper = document.getElementById('wrapper-local-camera');
+        if (localWrapper) localWrapper.classList.toggle('video-muted', !isVideoEnabled);
+    });
+}
+
+async function updateCameraDevicesList() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        availableVideoDevices = devices.filter(d => d.kind === 'videoinput');
+        
+        if (currentRoom && currentRoom.localParticipant) {
+            const pub = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera);
+            const mediaStreamTrack = pub?.videoTrack?.mediaStreamTrack;
+            if (mediaStreamTrack && typeof mediaStreamTrack.getSettings === 'function') {
+                const settings = mediaStreamTrack.getSettings();
+                if (settings.deviceId) {
+                    activeCameraDeviceId = settings.deviceId;
+                }
+            }
+        }
+        
+        if (!activeCameraDeviceId && availableVideoDevices.length > 0) {
+            activeCameraDeviceId = availableVideoDevices[0].deviceId;
+        }
+
+        if (flipCameraBtn) {
+            if (availableVideoDevices.length > 0) {
+                flipCameraBtn.style.display = 'flex';
+                if (flipCameraBtnText) {
+                    flipCameraBtnText.textContent = availableVideoDevices.length > 1 ? 'Switch Camera' : 'Camera Options';
+                }
+            } else {
+                flipCameraBtn.style.display = 'none';
+            }
+        }
+
+        if (cameraListContainer) {
+            if (availableVideoDevices.length > 1) {
+                cameraListContainer.innerHTML = '';
+                availableVideoDevices.forEach((device, idx) => {
+                    const label = device.label || `Camera ${idx + 1}`;
+                    const item = document.createElement('button');
+                    item.className = 'camera-item' + (device.deviceId === activeCameraDeviceId ? ' active' : '');
+                    item.type = 'button';
+                    
+                    const iconSpan = document.createElement('span');
+                    iconSpan.className = 'material-symbols-outlined';
+                    iconSpan.textContent = device.deviceId === activeCameraDeviceId ? 'check_circle' : 'videocam';
+                    
+                    const textSpan = document.createElement('span');
+                    textSpan.style.flex = '1';
+                    textSpan.style.overflow = 'hidden';
+                    textSpan.style.textOverflow = 'ellipsis';
+                    textSpan.style.whiteSpace = 'nowrap';
+                    textSpan.textContent = label;
+                    
+                    item.appendChild(iconSpan);
+                    item.appendChild(textSpan);
+                    
+                    item.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        await selectCameraDevice(device.deviceId);
+                    });
+                    
+                    cameraListContainer.appendChild(item);
+                });
+                cameraListContainer.style.display = 'flex';
+            } else {
+                cameraListContainer.style.display = 'none';
+                cameraListContainer.innerHTML = '';
+            }
+        }
+    } catch (err) {
+        console.warn("Could not enumerate media devices:", err);
+    }
+}
+
+async function selectCameraDevice(targetDeviceId) {
     if (!currentRoom) return;
-    isVideoEnabled = !isVideoEnabled;
-    await currentRoom.localParticipant.setCameraEnabled(isVideoEnabled);
-    toggleVideoBtn.classList.toggle('active', isVideoEnabled);
-    const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
-    const text = toggleVideoBtn.querySelector('.btn-text');
-    icon.textContent = isVideoEnabled ? 'videocam' : 'videocam_off';
-    text.textContent = isVideoEnabled ? 'Hide' : 'Show';
-    
-    const localWrapper = document.getElementById('wrapper-local-camera');
-    if (localWrapper) localWrapper.classList.toggle('video-muted', !isVideoEnabled);
-});
+    try {
+        activeCameraDeviceId = targetDeviceId;
+        
+        if (typeof currentRoom.switchActiveDevice === 'function') {
+            await currentRoom.switchActiveDevice('videoinput', targetDeviceId);
+        } else if (currentRoom.localParticipant) {
+            await currentRoom.localParticipant.setCameraEnabled(false);
+            await new Promise(r => setTimeout(r, 250));
+            await currentRoom.localParticipant.setCameraEnabled(true, {
+                deviceId: { exact: targetDeviceId }
+            });
+        }
+
+        const pub = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera);
+        if (pub && pub.videoTrack) {
+            const localVideoElement = document.getElementById('localVideo');
+            if (localVideoElement) {
+                pub.videoTrack.attach(localVideoElement);
+            }
+        }
+
+        if (backgroundProcessor) {
+            const videoTrack = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+            if (videoTrack) {
+                await videoTrack.setProcessor(backgroundProcessor);
+            }
+        }
+
+        await updateCameraDevicesList();
+
+        const selectedDevice = availableVideoDevices.find(d => d.deviceId === targetDeviceId);
+        const label = selectedDevice ? (selectedDevice.label || 'External Camera') : 'Camera';
+        showToast(`Switched camera to: ${label}`);
+    } catch (err) {
+        console.error("Error switching camera device:", err);
+        showToast("Could not switch camera: " + (err.message || "Unknown error"), true);
+    }
+}
+
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+        updateCameraDevicesList();
+    });
+}
 
 if (flipCameraBtn) {
-    if (!('ontouchstart' in window) && navigator.maxTouchPoints === 0) {
-        flipCameraBtn.style.display = 'none';
-    }
     flipCameraBtn.addEventListener('click', async () => {
         if (!currentRoom) return;
-        currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-        await currentRoom.localParticipant.setCameraEnabled(false);
-        await new Promise(r => setTimeout(r, 400));
-        await currentRoom.localParticipant.setCameraEnabled(true, { facingMode: currentFacingMode });
-        const pub = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera);
-        if (pub && pub.videoTrack) { pub.videoTrack.attach(localVideo); }
+        await updateCameraDevicesList();
+        
+        if (availableVideoDevices.length === 0) {
+            showToast("No camera detected.", true);
+            return;
+        }
+
+        if (availableVideoDevices.length === 1) {
+            const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+            if (isMobileDevice) {
+                currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+                await currentRoom.localParticipant.setCameraEnabled(false);
+                await new Promise(r => setTimeout(r, 400));
+                await currentRoom.localParticipant.setCameraEnabled(true, { facingMode: currentFacingMode });
+                const pub = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera);
+                if (pub && pub.videoTrack) { pub.videoTrack.attach(localVideo); }
+                showToast("Flipped camera");
+            } else {
+                showToast("Only 1 camera detected. Plug in an external camera to switch.", true);
+            }
+            return;
+        }
+
+        let currentIndex = availableVideoDevices.findIndex(d => d.deviceId === activeCameraDeviceId);
+        if (currentIndex === -1) currentIndex = 0;
+        const nextIndex = (currentIndex + 1) % availableVideoDevices.length;
+        const nextDevice = availableVideoDevices[nextIndex];
+        
+        await selectCameraDevice(nextDevice.deviceId);
     });
 }
 
 const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
 if (isMobileDevice && toggleScreenBtn) { toggleScreenBtn.style.display = 'none'; }
 
-toggleScreenBtn.addEventListener('click', async () => {
-    if (!currentRoom) return;
-    if (!isScreenSharing) {
-        try {
-            await currentRoom.localParticipant.setScreenShareEnabled(true);
-            isScreenSharing = true;
-            toggleScreenBtn.classList.add('active');
-            toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'cancel_presentation';
-            (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Stop'));
-        } catch (err) {
-            console.error("Error sharing screen:", err);
-            showToast("Could not share screen: " + (err.message || "Not supported on this device."), true);
+if (toggleScreenBtn) {
+    toggleScreenBtn.addEventListener('click', async () => {
+        if (!currentRoom) return;
+        if (!isScreenSharing) {
+            try {
+                await currentRoom.localParticipant.setScreenShareEnabled(true);
+                isScreenSharing = true;
+                toggleScreenBtn.classList.add('active');
+                toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'cancel_presentation';
+                (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Stop'));
+            } catch (err) {
+                console.error("Error sharing screen:", err);
+                showToast("Could not share screen: " + (err.message || "Not supported on this device."), true);
+            }
+        } else {
+            await currentRoom.localParticipant.setScreenShareEnabled(false);
+            isScreenSharing = false;
+            toggleScreenBtn.classList.remove('active');
+            toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'present_to_all';
+            (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Share'));
         }
-    } else {
-        await currentRoom.localParticipant.setScreenShareEnabled(false);
-        isScreenSharing = false;
-        toggleScreenBtn.classList.remove('active');
-        toggleScreenBtn.querySelector('.material-symbols-outlined').textContent = 'present_to_all';
-        (toggleScreenBtn.querySelector('.btn-text') && (toggleScreenBtn.querySelector('.btn-text').textContent = 'Share'));
-    }
-});
+    });
+}
 
 const toggleRecordBtn = document.getElementById('toggleRecordBtn');
 if (toggleRecordBtn) {
@@ -909,7 +1058,7 @@ if (toggleChatBtn) {
 
 // People sidebar logic
 if (togglePeopleBtn) {
-    const chatSidebar = document.querySelector('.chat-sidebar:not(.people-sidebar)');
+    const closePeopleBtn = document.getElementById('closePeopleBtn');
     togglePeopleBtn.addEventListener('click', () => { toggleSidebar(peopleSidebar, togglePeopleBtn); });
     if (closePeopleBtn) { closePeopleBtn.addEventListener('click', () => { closeAllSidebars(); }); }
 }
@@ -925,8 +1074,8 @@ function sendMessage() {
         chatInput.value = '';
     }
 }
-sendBtn.addEventListener('click', sendMessage);
-chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+if (chatInput) chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
 function appendMessage(sender, text, isSelf) {
     const msgDiv = document.createElement('div');
@@ -950,10 +1099,6 @@ function appendSystemMessage(text) {
     chatMessages.appendChild(msgDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
-
-// ==========================================
-// PHASE B: KEYED PARTICIPANT LIST
-// ==========================================
 /**
  * Diffs the participant list instead of rebuilding innerHTML from scratch.
  * Adds new participants, removes disconnected ones, updates existing ones.
