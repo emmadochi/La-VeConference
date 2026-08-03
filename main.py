@@ -118,6 +118,10 @@ async def get_admin():
     with open("static/admin.html", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
+@app.get("/google12c67def3a6aeef9.html")
+async def get_google_verification():
+    return HTMLResponse("google-site-verification: google12c67def3a6aeef9.html")
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(request: Request):
     await verify_admin(request)
