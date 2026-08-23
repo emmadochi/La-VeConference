@@ -335,18 +335,34 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         ),
         connectOptions: const ConnectOptions(
           timeouts: Timeouts(
-            connection: Duration(seconds: 30),
+            connection: Duration(seconds: 40),
             debounce: Duration(milliseconds: 20),
-            publish: Duration(seconds: 10),
-            subscribe: Duration(seconds: 10),
-            peerConnection: Duration(seconds: 10),
-            iceRestart: Duration(seconds: 10),
+            publish: Duration(seconds: 20),
+            subscribe: Duration(seconds: 20),
+            peerConnection: Duration(seconds: 30),
+            iceRestart: Duration(seconds: 20),
           ),
         ),
       );
       
-      await _room.localParticipant?.setCameraEnabled(widget.initialVideoOn);
-      await _room.localParticipant?.setMicrophoneEnabled(widget.initialAudioOn);
+      // Defensively initialize Camera & Microphone so permission denials do not crash the call
+      try {
+        if (widget.initialVideoOn) {
+          await _room.localParticipant?.setCameraEnabled(true);
+        }
+      } catch (camErr) {
+        debugPrint("Camera permission or initialization skipped: $camErr");
+        _isVideoOff = true;
+      }
+
+      try {
+        if (widget.initialAudioOn) {
+          await _room.localParticipant?.setMicrophoneEnabled(true);
+        }
+      } catch (micErr) {
+        debugPrint("Microphone permission or initialization skipped: $micErr");
+        _isMuted = true;
+      }
 
       if (mounted) {
         setState(() {
