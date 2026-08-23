@@ -3306,8 +3306,9 @@ body.is-native-app .hero-section h1 {
     position: absolute !important;
     top: auto !important;
     bottom: calc(100% + 14px) !important;
-    left: 50% !important;
-    transform: translateX(-50%) !important;
+    right: 0 !important;
+    left: auto !important;
+    transform: none !important;
     margin: 0 !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
