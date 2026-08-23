@@ -3293,4 +3293,52 @@ body.is-native-app .hero-section h1 {
     color: #ffffff;
 }
 
+/* Fix for More Options Menu and Emoji Popover */
+.more-options-wrapper,
+.react-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#moreOptionsMenu {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(18, 20, 31, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    padding: 8px;
+    width: 250px;
+    max-height: 420px;
+    overflow-y: auto;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
+    z-index: 99999 !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+#emojiPopover {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(18, 20, 31, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 30px;
+    padding: 6px 12px;
+    display: flex;
+    gap: 8px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
+    z-index: 99999 !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.media-controls {
+    overflow: visible !important;
+}
+
 

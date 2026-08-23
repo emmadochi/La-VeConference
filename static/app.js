@@ -2807,9 +2807,14 @@ if (navQaBtn) {
 
 const toggleMoreBtn = document.getElementById('toggleMoreBtn');
 const moreOptionsMenu = document.getElementById('moreOptionsMenu');
+const toggleSettingsMenuBtn = document.getElementById('toggleSettingsMenuBtn');
+
 if (toggleMoreBtn && moreOptionsMenu) {
     toggleMoreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (emojiPopover) emojiPopover.style.display = 'none';
+        if (toggleReactBtn) toggleReactBtn.classList.remove('active');
+
         const isShowing = moreOptionsMenu.style.display === 'block';
         moreOptionsMenu.style.display = isShowing ? 'none' : 'block';
         toggleMoreBtn.classList.toggle('active', !isShowing);
@@ -2823,10 +2828,20 @@ if (toggleMoreBtn && moreOptionsMenu) {
     });
 }
 
+if (toggleSettingsMenuBtn && navSettingsBtn) {
+    toggleSettingsMenuBtn.addEventListener('click', () => {
+        if (moreOptionsMenu) moreOptionsMenu.style.display = 'none';
+        if (toggleMoreBtn) toggleMoreBtn.classList.remove('active');
+        navSettingsBtn.click();
+    });
+}
 
 if (toggleReactBtn && emojiPopover) {
     toggleReactBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (moreOptionsMenu) moreOptionsMenu.style.display = 'none';
+        if (toggleMoreBtn) toggleMoreBtn.classList.remove('active');
+
         const isShowing = emojiPopover.style.display === 'flex' || emojiPopover.style.display === 'block';
         emojiPopover.style.display = isShowing ? 'none' : 'flex';
         toggleReactBtn.classList.toggle('active', !isShowing);
