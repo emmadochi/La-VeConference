@@ -3303,38 +3303,44 @@ body.is-native-app .hero-section h1 {
 }
 
 #moreOptionsMenu {
-    position: absolute;
-    bottom: calc(100% + 14px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(18, 20, 31, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 16px;
-    padding: 8px;
-    width: 250px;
-    max-height: 420px;
-    overflow-y: auto;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
+    position: absolute !important;
+    top: auto !important;
+    bottom: calc(100% + 14px) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    margin: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    background: rgba(18, 20, 31, 0.98) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    border-radius: 16px !important;
+    padding: 8px !important;
+    width: 250px !important;
+    max-height: 420px !important;
+    overflow-y: auto !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9) !important;
     z-index: 99999 !important;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(25px) !important;
+    -webkit-backdrop-filter: blur(25px) !important;
 }
 
 #emojiPopover {
-    position: absolute;
-    bottom: calc(100% + 14px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(18, 20, 31, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 30px;
-    padding: 6px 12px;
+    position: absolute !important;
+    top: auto !important;
+    bottom: calc(100% + 14px) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    margin: 0 !important;
+    background: rgba(18, 20, 31, 0.98) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    border-radius: 30px !important;
+    padding: 6px 12px !important;
     display: flex;
     gap: 8px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9) !important;
     z-index: 99999 !important;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(25px) !important;
+    -webkit-backdrop-filter: blur(25px) !important;
 }
 
 .media-controls {
