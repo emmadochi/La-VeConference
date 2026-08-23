@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'login_screen.dart';
@@ -9,6 +10,7 @@ import 'account_details_screen.dart';
 import 'notifications_screen.dart';
 import 'privacy_security_screen.dart';
 import 'settings_screen.dart';
+import 'support_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -21,7 +23,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isUploading = false;
 
   Future<void> _logout(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
+    if (Firebase.apps.isNotEmpty) {
+      await FirebaseAuth.instance.signOut();
+    }
     if (context.mounted) {
       Navigator.pushReplacement(
         context,
@@ -42,7 +46,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
 
       final File file = File(image.path);
-      final user = FirebaseAuth.instance.currentUser;
+      final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
       if (user == null) return;
 
       // Upload to Firebase Storage
@@ -96,100 +100,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
             letterSpacing: 1.2,
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.white70),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-          ),
-          const SizedBox(width: 8),
-        ],
       ),
       body: Stack(
         children: [
           // Background Glows
           Positioned(
-            top: 0,
-            left: -100,
+            top: -100,
+            right: -100,
             child: Container(
               width: 300,
               height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [
-                    const Color(0xFF5C00FF).withOpacity(0.15),
-                    Colors.transparent,
-                  ],
+                  colors: [const Color(0xFF00E5FF).withOpacity(0.15), Colors.transparent],
                 ),
               ),
             ),
           ),
           Positioned(
             bottom: -50,
-            right: -50,
+            left: -50,
             child: Container(
-              width: 200,
-              height: 200,
+              width: 300,
+              height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [
-                    const Color(0xFFB524D3).withOpacity(0.15),
-                    Colors.transparent,
-                  ],
+                  colors: [const Color(0xFF5C00FF).withOpacity(0.15), Colors.transparent],
                 ),
               ),
             ),
           ),
-
           SafeArea(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               child: Column(
                 children: [
                   const SizedBox(height: 20),
-                  // Avatar Profile Section
+                  // User Avatar
                   Center(
                     child: Stack(
                       children: [
                         Container(
-                          width: 120,
-                          height: 120,
-                          decoration: BoxDecoration(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
                             shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)],
+                            gradient: LinearGradient(
+                              colors: [Color(0xFF00E5FF), Color(0xFF5C00FF)],
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF00E5FF).withOpacity(0.3),
-                                blurRadius: 20,
-                                spreadRadius: 2,
-                              ),
-                            ],
                           ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: Container(
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Color(0xFF070B19),
-                              ),
-                              child: Center(
-                                child: _isUploading
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF070B19),
+                              shape: BoxShape.circle,
+                            ),
+                            child: CircleAvatar(
+                              radius: 56,
+                              backgroundColor: const Color(0xFF00E5FF).withOpacity(0.1),
+                              child: _isUploading
                                   ? const CircularProgressIndicator(color: Color(0xFF00E5FF))
-                                  : (photoURL != null
-                                      ? ClipRRect(
-                                          borderRadius: BorderRadius.circular(100),
+                                  : (photoURL != null && photoURL.isNotEmpty
+                                      ? ClipOval(
                                           child: Image.network(
                                             photoURL,
-                                            width: double.infinity,
-                                            height: double.infinity,
+                                            width: 112,
+                                            height: 112,
                                             fit: BoxFit.cover,
                                             errorBuilder: (context, error, stackTrace) {
                                               return Text(
@@ -203,7 +180,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           initial,
                                           style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 48, fontWeight: FontWeight.bold),
                                         )),
-                              ),
                             ),
                           ),
                         ),
@@ -236,21 +212,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     email,
                     style: const TextStyle(color: Colors.white54, fontSize: 16),
                   ),
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 36),
 
-                  // Account Settings
+                  // Account Settings & Support Options
                   _buildSettingOption(Icons.person_outline, 'Account Details', const Color(0xFF00E5FF), () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => const AccountDetailsScreen()));
                   }),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   _buildSettingOption(Icons.notifications_none, 'Notifications', const Color(0xFF5C00FF), () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => const NotificationsScreen()));
                   }),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   _buildSettingOption(Icons.lock_outline, 'Privacy & Security', const Color(0xFFB524D3), () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => const PrivacySecurityScreen()));
                   }),
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 14),
+                  _buildSettingOption(Icons.support_agent, 'Help & Support', const Color(0xFF00FFA3), () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const SupportScreen()));
+                  }),
+                  const SizedBox(height: 14),
+                  _buildSettingOption(Icons.settings_outlined, 'App Settings', const Color(0xFFFFB300), () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
+                  }),
+                  const SizedBox(height: 32),
 
                   // Logout Button
                   GestureDetector(

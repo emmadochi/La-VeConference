@@ -3,7 +3,7 @@ import 'dart:ui';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:livekit_client/livekit_client.dart';
+import 'package:livekit_client/livekit_client.dart' hide ConnectionState;
 import 'package:flutter_background/flutter_background.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
@@ -1823,7 +1823,6 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     final isLocal = p == _room.localParticipant;
     final forceAvatar = isLocal && _isVideoOff;
     final showAvatar = forceAvatar || isMuted || track == null || (_isDataSaverMode && !isLocal);
-    final location = isLocal ? 'Seattle, WA' : 'London, UK'; // Mock locations based on UI
     final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
     
     return GestureDetector(
@@ -1887,57 +1886,43 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             Positioned(
               top: 16,
               left: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    children: [
-                      Text(
-                        p.name.isNotEmpty ? p.name : 'Participant',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          shadows: [
-                            Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 1))
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (widget.isHost && p is RemoteParticipant)
-                        GestureDetector(
-                          onTap: () => _muteParticipant(p.identity),
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: Colors.black45,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Icon(
-                              p.isMicrophoneEnabled() ? Icons.mic : Icons.mic_off, 
-                              color: p.isMicrophoneEnabled() ? Colors.white70 : Colors.red, 
-                              size: 16,
-                            ),
-                          ),
-                        )
-                      else
-                        Icon(
-                          p.isMicrophoneEnabled() ? Icons.mic : Icons.mic_off,
-                          color: p.isMicrophoneEnabled() ? Colors.white70 : Colors.red,
-                          size: 16,
-                        ),
-                    ],
-                  ),
                   Text(
-                    location,
+                    p.name.isNotEmpty ? p.name : 'Participant',
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
                       shadows: [
                         Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 1))
                       ],
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  if (widget.isHost && p is RemoteParticipant)
+                    GestureDetector(
+                      onTap: () => _muteParticipant(p.identity),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(
+                          p.isMicrophoneEnabled() ? Icons.mic : Icons.mic_off, 
+                          color: p.isMicrophoneEnabled() ? Colors.white70 : Colors.red, 
+                          size: 16,
+                        ),
+                      ),
+                    )
+                  else
+                    Icon(
+                      p.isMicrophoneEnabled() ? Icons.mic : Icons.mic_off,
+                      color: p.isMicrophoneEnabled() ? Colors.white70 : Colors.red,
+                      size: 16,
+                    ),
                 ],
               ),
             ),

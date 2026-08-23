@@ -23,6 +23,10 @@
                 <button id="themeToggleBtn" class="theme-toggle" title="Toggle Light/Dark Mode">
                     <span class="material-symbols-outlined" id="themeIcon">light_mode</span>
                 </button>
+                <button id="openSupportBtn" class="nav-btn" style="display: inline-flex; align-items: center; gap: 4px;" title="Need Help? Contact Support">
+                    <span class="material-symbols-outlined" style="font-size: 18px; color: #00e5ff;">help</span>
+                    Support
+                </button>
                 <div class="auth-section" id="authSection">
                     <button id="loginBtn" class="nav-btn">Log In</button>
                     <button id="signupBtn" class="nav-btn primary">Sign Up</button>
@@ -224,12 +228,16 @@
                 <h2 id="modalTitle">Log In</h2>
                 <input type="email" id="authEmail" class="modal-input" placeholder="Email">
                 <input type="password" id="authPassword" class="modal-input" placeholder="Password">
+                <div id="forgotPasswordContainer" style="text-align: right; margin: -5px 0 14px 0;">
+                    <a href="#" id="forgotPasswordLink" style="font-size: 0.82rem; color: #00E5FF; text-decoration: none;">Forgot password?</a>
+                </div>
                 <button id="authSubmitBtn" class="primary-btn full-width">Submit</button>
                 <div class="auth-divider" style="text-align: center; margin: 15px 0; color: var(--text-muted); font-size: 0.9rem;">OR</div>
                 <button id="googleAuthBtn" class="secondary-btn full-width" style="display: flex; align-items: center; justify-content: center; gap: 10px; background: white; color: black; border: 1px solid #ccc; font-weight: 500;">
                     <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width: 18px; height: 18px;">
                     Continue with Google
                 </button>
+                <p id="authSuccess" class="success-text" style="display: none; color: #10B981; font-size: 0.85rem; margin-top: 10px; text-align: center;"></p>
                 <p id="authError" class="error-text"></p>
                 <p class="switch-auth">Don't have an account? <a href="#" id="switchAuthMode">Sign up</a></p>
             </div>
@@ -349,6 +357,164 @@
                 </p>
             </div>
         </div>
+
+        <!-- Multi-Streaming (RTMP to YouTube/Facebook) Modal -->
+        <div id="multiStreamModal" class="modal-overlay" style="display: none; z-index: 9999;">
+            <div class="modal-content multistream-modal" style="text-align: left; max-width: 580px; width: 92%;">
+                <button class="close-modal" id="closeMultiStreamModalBtn">&times;</button>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="stream-icon-badge">
+                            <span class="material-symbols-outlined" style="color: #FF0055; font-size: 1.8rem;">podcasts</span>
+                        </div>
+                        <div>
+                            <h2 style="color: #ffffff; font-size: 1.25rem; font-weight: 700; margin: 0;">Multi-Stream Live</h2>
+                            <p style="margin: 0; font-size: 0.82rem; color: rgba(255,255,255,0.6);">Broadcast simultaneously to YouTube, Facebook &amp; RTMP</p>
+                        </div>
+                    </div>
+                    <span id="userPlanBadge" class="plan-pill pro-pill">Checking Plan...</span>
+                </div>
+
+                <!-- Live status banner if active -->
+                <div id="activeStreamBanner" class="active-stream-banner" style="display: none;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="pulsing-live-dot"></span>
+                        <div>
+                            <strong style="color: #ff3366; font-size: 0.88rem;">BROADCAST LIVE NOW</strong>
+                            <div id="activeStreamDetails" style="font-size: 0.78rem; color: rgba(255,255,255,0.7);">Streaming to destinations</div>
+                        </div>
+                    </div>
+                    <button id="stopActiveMultiStreamBtn" class="danger-btn" style="padding: 6px 14px; font-size: 0.82rem;">Stop Broadcast</button>
+                </div>
+
+                <!-- Destinations List -->
+                <div style="margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label style="font-size: 0.85rem; font-weight: 600; color: #00E5FF; text-transform: uppercase; letter-spacing: 0.5px;">Broadcast Destinations</label>
+                        <button id="addNewDestinationBtn" class="secondary-btn" style="padding: 4px 10px; font-size: 0.78rem; border-radius: 6px;">
+                            <span class="material-symbols-outlined" style="font-size: 1rem; vertical-align: middle;">add</span> Add Destination
+                        </button>
+                    </div>
+
+                    <div id="destinationsContainer" class="destinations-list">
+                        <!-- Injected via JavaScript -->
+                    </div>
+                </div>
+
+                <!-- New Destination Form (hidden by default) -->
+                <div id="newDestForm" class="new-dest-form" style="display: none;">
+                    <h4 style="margin: 0 0 10px 0; color: #fff; font-size: 0.9rem;">Add New Destination</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                        <div>
+                            <label style="font-size: 0.75rem; color: rgba(255,255,255,0.7);">Platform</label>
+                            <select id="destPlatformSelect" class="modal-input" style="margin: 4px 0 0 0; padding: 8px; font-size: 0.85rem;">
+                                <option value="youtube">YouTube Live</option>
+                                <option value="facebook">Facebook Live</option>
+                                <option value="twitch">Twitch</option>
+                                <option value="custom">Custom RTMP</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 0.75rem; color: rgba(255,255,255,0.7);">Label / Channel Name</label>
+                            <input type="text" id="destNameInput" class="modal-input" placeholder="e.g. Sunday Service" style="margin: 4px 0 0 0; padding: 8px; font-size: 0.85rem;">
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <label style="font-size: 0.75rem; color: rgba(255,255,255,0.7);">Server / RTMP Ingest URL</label>
+                        <input type="text" id="destUrlInput" class="modal-input" placeholder="rtmp://a.rtmp.youtube.com/live2" style="margin: 4px 0 0 0; padding: 8px; font-size: 0.85rem; font-family: monospace;">
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <label style="font-size: 0.75rem; color: rgba(255,255,255,0.7);">Stream Key (Private)</label>
+                        <input type="password" id="destKeyInput" class="modal-input" placeholder="Paste your stream key here" style="margin: 4px 0 0 0; padding: 8px; font-size: 0.85rem; font-family: monospace;">
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                        <button id="cancelDestBtn" class="secondary-btn" style="padding: 6px 12px; font-size: 0.82rem;">Cancel</button>
+                        <button id="saveDestBtn" class="primary-btn" style="padding: 6px 16px; font-size: 0.82rem; width: auto;">Save Destination</button>
+                    </div>
+                </div>
+
+                <!-- Stream Layout Options -->
+                <div style="margin-bottom: 18px;">
+                    <label style="font-size: 0.8rem; font-weight: 600; color: rgba(255,255,255,0.8); display: block; margin-bottom: 6px;">Broadcast Video Layout</label>
+                    <div class="stream-layout-picker">
+                        <label class="layout-option active">
+                            <input type="radio" name="streamLayout" value="speaker" checked>
+                            <span class="material-symbols-outlined">person</span>
+                            <span>Speaker Focus</span>
+                        </label>
+                        <label class="layout-option">
+                            <input type="radio" name="streamLayout" value="grid">
+                            <span class="material-symbols-outlined">grid_view</span>
+                            <span>Grid View</span>
+                        </label>
+                        <label class="layout-option">
+                            <input type="radio" name="streamLayout" value="presentation">
+                            <span class="material-symbols-outlined">present_to_all</span>
+                            <span>Presentation</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="startMultiStreamBtn" class="primary-btn" style="flex: 1; background: linear-gradient(135deg, #FF0055, #7928CA); font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px;">
+                        <span class="material-symbols-outlined">podcasts</span> Go Live to Selected Platforms
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Subscription Upgrade Modal -->
+        <div id="upgradeModal" class="modal-overlay" style="display: none; z-index: 10000;">
+            <div class="modal-content upgrade-modal" style="max-width: 620px; width: 94%; text-align: center;">
+                <button class="close-modal" id="closeUpgradeModalBtn">&times;</button>
+                <div style="display: inline-flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, rgba(255,0,85,0.2), rgba(0,229,255,0.2)); border: 1px solid rgba(0,229,255,0.4); margin-bottom: 12px;">
+                    <span class="material-symbols-outlined" style="font-size: 2.2rem; color: #00E5FF;">workspace_premium</span>
+                </div>
+                <h2 style="color: #ffffff; font-size: 1.5rem; font-weight: 800; margin-bottom: 6px;">Unlock Multi-Streaming</h2>
+                <p style="color: rgba(255,255,255,0.7); font-size: 0.92rem; max-width: 460px; margin: 0 auto 24px auto;">
+                    Expand your ministry, church, or influencer reach by broadcasting simultaneously to YouTube Live, Facebook Live, and custom RTMP channels.
+                </p>
+
+                <!-- Pricing Cards Grid -->
+                <div class="pricing-cards-grid">
+                    <!-- Pro Plan Card -->
+                    <div class="plan-card">
+                        <div class="plan-card-header">
+                            <span class="plan-name">Pro Creator</span>
+                            <div class="plan-price">$29<span>/mo</span></div>
+                        </div>
+                        <ul class="plan-features">
+                            <li><span class="material-symbols-outlined">check_circle</span> Up to 3 RTMP Destinations</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> YouTube &amp; Facebook Live</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> 1080p HD Cloud Streaming</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> Speaker &amp; Grid Layouts</li>
+                        </ul>
+                        <button class="subscribe-btn" data-plan="pro">Activate Pro Plan</button>
+                    </div>
+
+                    <!-- Ministry Plan Card -->
+                    <div class="plan-card featured-plan">
+                        <div class="popular-tag">MOST POPULAR FOR CHURCHES</div>
+                        <div class="plan-card-header">
+                            <span class="plan-name">Ministry &amp; Enterprise</span>
+                            <div class="plan-price">$79<span>/mo</span></div>
+                        </div>
+                        <ul class="plan-features">
+                            <li><span class="material-symbols-outlined">check_circle</span> Up to 5+ RTMP Destinations</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> YouTube, Facebook, Twitch, Web</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> Auto Cloud Recording &amp; Archive</li>
+                            <li><span class="material-symbols-outlined">check_circle</span> Custom Watermark &amp; Branding</li>
+                        </ul>
+                        <button class="subscribe-btn highlight-btn" data-plan="ministry">Activate Ministry Plan</button>
+                    </div>
+                </div>
+
+                <p style="font-size: 0.78rem; color: rgba(255,255,255,0.4); margin-top: 18px;">
+                    Instant activation. Cancel or upgrade your plan anytime from your account settings.
+                </p>
+            </div>
+        </div>
         
         <!-- IN-CALL APP LAYOUT -->
         <div class="app-layout" id="appLayout" style="display: none;">
@@ -414,6 +580,12 @@
                         <video id="localVideo" autoplay muted playsinline></video>
                         <div class="avatar-placeholder" id="localAvatar">You</div>
                         <span class="label" id="localLabel">You</span>
+                        <button class="fullscreen-overlay-btn" id="localFullscreenBtn" title="Full Screen">
+                            <span class="material-symbols-outlined">fullscreen</span>
+                        </button>
+                        <button class="pip-overlay-btn" id="localPipBtn" title="Picture in Picture">
+                            <span class="material-symbols-outlined">picture_in_picture_alt</span>
+                        </button>
                         <button class="pin-overlay-btn" title="Spotlight Video">
                             <span class="material-symbols-outlined">push_pin</span>
                         </button>
@@ -454,6 +626,9 @@
                             <span class="material-symbols-outlined">more_horiz</span>
                         </button>
                         <div class="dropdown-menu glassmorphic" id="moreOptionsMenu" style="display: none; bottom: 100%; top: auto; left: 50%; transform: translateX(-50%); margin-bottom: 10px;">
+                            <button id="toggleAppFullscreenBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">fullscreen</span> Fullscreen Mode
+                            </button>
                             <button id="toggleDataSaverBtn" class="dropdown-item">
                                 <span class="material-symbols-outlined">data_saver_on</span> Data Saver
                             </button>
@@ -462,6 +637,9 @@
                             </button>
                             <button id="toggleVmixBtn" class="dropdown-item" style="display: none;">
                                 <span class="material-symbols-outlined">live_tv</span> vMix / Live Ingest
+                            </button>
+                            <button id="toggleMultiStreamBtn" class="dropdown-item" style="display: none;">
+                                <span class="material-symbols-outlined" style="color: #FF0055;">podcasts</span> Multi-Stream (YouTube / FB)
                             </button>
                             <button id="toggleEffectsBtn" class="dropdown-item">
                                 <span class="material-symbols-outlined">auto_awesome</span> Effects
@@ -472,10 +650,32 @@
                             <button id="shareLinkBtn" class="dropdown-item">
                                 <span class="material-symbols-outlined">link</span> Copy Meeting Link
                             </button>
-                            <button id="flipCameraBtn" class="dropdown-item flip-cam-btn" style="display: none;">
-                                <span class="material-symbols-outlined">cameraswitch</span> <span id="flipCameraBtnText">Switch Camera</span>
+                            <button id="flipCameraBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span class="material-symbols-outlined">cameraswitch</span>
+                                    <span id="flipCameraBtnText">Camera</span>
+                                </div>
+                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
                             </button>
                             <div id="cameraListContainer" class="camera-list-sub-menu" style="display: none;"></div>
+
+                            <button id="audioDevicesBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span class="material-symbols-outlined">mic</span>
+                                    <span id="audioDevicesBtnText">Microphone</span>
+                                </div>
+                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
+                            </button>
+                            <div id="audioListContainer" class="camera-list-sub-menu" style="display: none;"></div>
+
+                            <button id="speakerDevicesBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span class="material-symbols-outlined">volume_up</span>
+                                    <span id="speakerDevicesBtnText">Speaker</span>
+                                </div>
+                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
+                            </button>
+                            <div id="speakerListContainer" class="camera-list-sub-menu" style="display: none;"></div>
                             <button id="muteAllBtn" class="dropdown-item" style="display: none; color: #ef4444;">
                                 <span class="material-symbols-outlined">mic_off</span> Mute All
                             </button>
@@ -574,6 +774,53 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- USER SUPPORT MODAL -->
+        <div id="supportModal" class="modal-backdrop" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); z-index: 99999; justify-content: center; align-items: center;">
+            <div class="glass-card" style="background: #0d1226; border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 16px; width: 90%; max-width: 480px; padding: 28px; box-shadow: 0 15px 40px rgba(0,0,0,0.6); position: relative;">
+                <button type="button" id="closeSupportModalBtn" style="position: absolute; top: 16px; right: 16px; background: transparent; border: none; color: #8b949e; font-size: 24px; cursor: pointer;">&times;</button>
+                
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+                    <div style="background: rgba(0, 229, 255, 0.15); width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #00e5ff;">
+                        <span class="material-symbols-outlined">support_agent</span>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; color: white; font-size: 1.2rem;">Contact Support</h3>
+                        <p style="margin: 2px 0 0 0; color: #8b949e; font-size: 0.8rem;">How can our team help your meeting or broadcast today?</p>
+                    </div>
+                </div>
+
+                <form id="userSupportForm">
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; font-size: 0.8rem; color: #c9d1d9; margin-bottom: 6px; font-weight: 500;">Issue Category</label>
+                        <select id="userSupportCategory" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white; padding: 10px; font-size: 0.9rem; outline: none;">
+                            <option value="audio_video">🎤 Audio &amp; Video / Permissions</option>
+                            <option value="broadcast">📡 Broadcast &amp; OBS/vMix Ingress</option>
+                            <option value="billing">💎 Subscription &amp; Plan Upgrade</option>
+                            <option value="account">🔒 Account &amp; Meeting Access</option>
+                            <option value="general">💬 General Question / Feedback</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; font-size: 0.8rem; color: #c9d1d9; margin-bottom: 6px; font-weight: 500;">Subject *</label>
+                        <input type="text" id="userSupportSubject" required placeholder="e.g. Cannot hear host in Sunday Fellowship room" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white; padding: 10px; font-size: 0.9rem; outline: none;">
+                    </div>
+
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; font-size: 0.8rem; color: #c9d1d9; margin-bottom: 6px; font-weight: 500;">Message / Details *</label>
+                        <textarea id="userSupportMessage" required rows="4" placeholder="Describe what happened or what help you need..." style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white; padding: 10px; font-size: 0.9rem; outline: none; resize: vertical;"></textarea>
+                    </div>
+
+                    <div id="userSupportAlert" style="display: none; padding: 10px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 14px;"></div>
+
+                    <button type="submit" id="userSupportSubmitBtn" class="primary-btn" style="width: 100%; justify-content: center; padding: 12px; font-size: 0.95rem;">
+                        <span class="material-symbols-outlined">send</span>
+                        Submit Support Ticket
+                    </button>
+                </form>
             </div>
         </div>
     

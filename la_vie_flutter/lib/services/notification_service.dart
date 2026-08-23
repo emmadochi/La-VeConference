@@ -22,13 +22,23 @@ class NotificationService {
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
+
+    const LinuxInitializationSettings initializationSettingsLinux = LinuxInitializationSettings(
+      defaultActionName: 'Open notification',
+    );
     
     final InitializationSettings initializationSettings = InitializationSettings(
       android: initializationSettingsAndroid,
       iOS: initializationSettingsIOS,
+      macOS: initializationSettingsIOS,
+      linux: initializationSettingsLinux,
     );
 
-    await flutterLocalNotificationsPlugin.initialize(settings: initializationSettings);
+    try {
+      await flutterLocalNotificationsPlugin.initialize(settings: initializationSettings);
+    } catch (e) {
+      debugPrint('NotificationService initialization skipped or unsupported on this platform: $e');
+    }
   }
 
   Future<void> requestPermissions() async {

@@ -238,9 +238,18 @@
             <span>Admin</span>
         </div>
         
-        <a class="admin-nav-item active">
+        <a class="admin-nav-item active" id="navOverview">
             <span class="material-symbols-outlined">dashboard</span>
             Overview
+        </a>
+        <a class="admin-nav-item" id="navCampaigns">
+            <span class="material-symbols-outlined">campaign</span>
+            Marketing Push
+        </a>
+        <a class="admin-nav-item" id="navHelpdesk" style="position: relative;">
+            <span class="material-symbols-outlined">support_agent</span>
+            Support Helpdesk
+            <span id="openTicketsBadge" style="display: none; position: absolute; right: 14px; background: #ff5555; color: white; border-radius: 10px; padding: 2px 7px; font-size: 0.7rem; font-weight: bold;">0</span>
         </a>
         <a class="admin-nav-item" href="/">
             <span class="material-symbols-outlined">home</span>
@@ -255,73 +264,402 @@
 
     <main class="admin-content">
         <div class="admin-header">
-            <h2>Dashboard Overview</h2>
+            <h2 id="viewTitle">Dashboard Overview</h2>
             <div style="display: flex; align-items: center; gap: 10px;">
                 <span id="adminEmail" style="color: #00e5ff;"></span>
             </div>
         </div>
         
         <div id="errorBanner"></div>
+        <div id="successBanner" style="display:none; background: rgba(0, 229, 255, 0.1); border: 1px solid #00e5ff; color: #00e5ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;"></div>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="title">Total Users</div>
-                <div class="value" id="statUsers">-</div>
-                <span class="material-symbols-outlined icon">group</span>
+        <!-- OVERVIEW VIEW -->
+        <div id="overviewSection">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="title">Total Users</div>
+                    <div class="value" id="statUsers">-</div>
+                    <span class="material-symbols-outlined icon">group</span>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="title">Active Rooms</div>
+                    <div class="value" id="statRooms">-</div>
+                    <span class="material-symbols-outlined icon">podcasts</span>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="title">Total Scheduled Meetings</div>
+                    <div class="value" id="statMeetings">-</div>
+                    <span class="material-symbols-outlined icon">event_available</span>
+                </div>
             </div>
-            
-            <div class="stat-card">
-                <div class="title">Active Rooms</div>
-                <div class="value" id="statRooms">-</div>
-                <span class="material-symbols-outlined icon">podcasts</span>
+
+            <div class="charts-container">
+                <h3 style="margin-top: 0; color: white; font-size: 1.1rem; margin-bottom: 20px;">Platform Growth Overview</h3>
+                <div style="position: relative; height: 300px; width: 100%;">
+                    <canvas id="overviewChart"></canvas>
+                </div>
             </div>
-            
-            <div class="stat-card">
-                <div class="title">Total Scheduled Meetings</div>
-                <div class="value" id="statMeetings">-</div>
-                <span class="material-symbols-outlined icon">event_available</span>
+
+            <div class="data-tables-container">
+                <div class="data-table-card">
+                    <h3>Recent Users</h3>
+                    <div style="overflow-x: auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name / Email</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recentUsersTableBody">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="data-table-card">
+                    <h3>Upcoming Meetings</h3>
+                    <div style="overflow-x: auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Date/Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="upcomingMeetingsTableBody">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="charts-container">
-            <h3 style="margin-top: 0; color: white; font-size: 1.1rem; margin-bottom: 20px;">Platform Growth Overview</h3>
-            <div style="position: relative; height: 300px; width: 100%;">
-                <canvas id="overviewChart"></canvas>
-            </div>
-        </div>
+        <!-- MARKETING CAMPAIGNS VIEW -->
+        <div id="campaignsSection" style="display: none;">
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; margin-bottom: 30px;">
+                <!-- Composer Card -->
+                <div class="stat-card" style="padding: 28px;">
+                    <h3 style="margin-top: 0; color: white; display: flex; align-items: center; gap: 8px;">
+                        <span class="material-symbols-outlined" style="color: #00e5ff;">send</span>
+                        Compose Multi-Channel Broadcast
+                    </h3>
+                    <p style="color: #8b949e; font-size: 0.9rem; margin-top: -5px; margin-bottom: 20px;">
+                        Send instant push notifications and branded responsive HTML emails to your community.
+                    </p>
 
-        <div class="data-tables-container">
+                    <form id="broadcastForm">
+                        <!-- Delivery Channels -->
+                        <div style="margin-bottom: 18px; background: rgba(255,255,255,0.03); padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
+                            <label style="display: block; color: #00e5ff; font-size: 0.85rem; margin-bottom: 8px; font-weight: 600;">Delivery Channels</label>
+                            <div style="display: flex; gap: 20px;">
+                                <label style="display: flex; align-items: center; gap: 8px; color: white; font-size: 0.9rem; cursor: pointer;">
+                                    <input type="checkbox" id="chanPush" checked style="accent-color: #00e5ff; width: 16px; height: 16px;">
+                                    📱 Mobile Push (FCM)
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; color: white; font-size: 0.9rem; cursor: pointer;">
+                                    <input type="checkbox" id="chanEmail" checked style="accent-color: #00e5ff; width: 16px; height: 16px;">
+                                    📧 HTML Email Newsletter
+                                </label>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Target Audience</label>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <select id="campSegment" style="flex: 1; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                                    <option value="all">🌐 All Registered Users</option>
+                                    <option value="free">⭐ Free Tier Only (Upgrade Follow-up)</option>
+                                    <option value="pro">👑 Pro & Ministry Subscribers</option>
+                                    <option value="inactive">💤 Inactive Users (7+ Days)</option>
+                                </select>
+                                <span id="audienceBadge" style="background: rgba(0, 229, 255, 0.1); color: #00e5ff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; white-space: nowrap;">
+                                    Calculating...
+                                </span>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Campaign Title *</label>
+                            <input type="text" id="campTitle" required placeholder="e.g. 🔴 Sunday Service is Starting in 15 Mins!" style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                        </div>
+
+                        <div id="emailSubjectContainer" style="margin-bottom: 16px;">
+                            <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Email Subject Line (Optional - defaults to Title)</label>
+                            <input type="text" id="campEmailSubject" placeholder="e.g. Join Us Live: Sunday Fellowship & Sermon Notes" style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Message Body *</label>
+                            <textarea id="campBody" required rows="3" placeholder="e.g. Join us live on La-Vie for today's sermon. Tap below to enter the main stage." style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none; resize: vertical;"></textarea>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+                            <div>
+                                <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Action Trigger</label>
+                                <select id="campActionType" style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                                    <option value="open_room">🎥 Join Conference Room</option>
+                                    <option value="open_upgrade">💎 Open Subscription Paywall</option>
+                                    <option value="open_notes">📝 Open Meeting Notes</option>
+                                    <option value="general">📢 General Announcement</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Action Value / Room ID</label>
+                                <input type="text" id="campActionValue" placeholder="e.g. sunday-fellowship" style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 24px;">
+                            <label style="display: block; color: #c9d1d9; font-size: 0.85rem; margin-bottom: 6px; font-weight: 500;">Image Banner URL (Optional)</label>
+                            <input type="url" id="campImageUrl" placeholder="https://example.com/banner.jpg" style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; padding: 10px; outline: none;">
+                        </div>
+
+                        <button type="submit" id="sendCampaignBtn" style="width: 100%; background: linear-gradient(135deg, #00e5ff, #5c00ff); color: white; font-weight: bold; border: none; padding: 14px; border-radius: 10px; font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform 0.2s;">
+                            <span class="material-symbols-outlined">rocket_launch</span>
+                            Send Broadcast Campaign
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Live Preview Card -->
+                <div class="stat-card" style="padding: 28px; display: flex; flex-direction: column;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3 style="margin: 0; color: white; display: flex; align-items: center; gap: 8px;">
+                            <span class="material-symbols-outlined" style="color: #00e5ff;">visibility</span>
+                            Live Preview
+                        </h3>
+                        <div style="display: flex; gap: 6px;">
+                            <button type="button" id="tabPrevPush" style="background: rgba(0, 229, 255, 0.2); color: #00e5ff; border: 1px solid #00e5ff; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; cursor: pointer;">
+                                📱 Mobile Push
+                            </button>
+                            <button type="button" id="tabPrevEmail" style="background: rgba(255, 255, 255, 0.05); color: #8b949e; border: 1px solid rgba(255, 255, 255, 0.1); padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; cursor: pointer;">
+                                📧 HTML Email
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Mobile Push Simulation -->
+                    <div id="prevPushBox" style="background: #1e1e30; border-radius: 18px; padding: 16px; border: 1px solid rgba(255,255,255,0.1); margin-top: auto; margin-bottom: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                            <img src="/static/logoI.png" alt="App" style="width: 24px; height: 24px; border-radius: 6px;">
+                            <span style="font-weight: 600; color: white; font-size: 0.9rem;">La-Vie Conference</span>
+                            <span style="color: #8b949e; font-size: 0.75rem; margin-left: auto;">now</span>
+                        </div>
+                        <div id="previewTitle" style="font-weight: bold; color: white; font-size: 0.95rem; margin-bottom: 4px;">
+                            Notification Title
+                        </div>
+                        <div id="previewBody" style="color: #c9d1d9; font-size: 0.85rem; line-height: 1.4;">
+                            Your notification message will appear here for recipients.
+                        </div>
+                        <div id="previewActionBadge" style="display: inline-block; margin-top: 10px; background: rgba(0, 229, 255, 0.15); color: #00e5ff; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">
+                            🎥 Tap to Join Room
+                        </div>
+                    </div>
+
+                    <!-- Email Newsletter Simulation -->
+                    <div id="prevEmailBox" style="display: none; background: #0E1326; border-radius: 16px; padding: 20px; border: 1px solid rgba(0, 229, 255, 0.3); margin-top: auto; margin-bottom: auto; max-height: 380px; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                        <!-- Brand Header -->
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 14px; margin-bottom: 14px;">
+                            <img src="/static/logoI.png" alt="La-Vie Logo" style="width: 36px; height: 36px; border-radius: 8px; border: 1.5px solid rgba(0, 229, 255, 0.5); box-shadow: 0 2px 10px rgba(0, 229, 255, 0.3);">
+                            <div style="text-align: left;">
+                                <div style="color: #FFFFFF; font-weight: 800; font-size: 1rem; letter-spacing: 1.5px; line-height: 1;">LA-VIE<span style="color: #00E5FF;">.</span></div>
+                                <div style="font-size: 0.65rem; color: #00E5FF; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-top: 3px;">PREMIUM BROADCAST &amp; CONFERENCE</div>
+                            </div>
+                        </div>
+                        
+                        <div style="text-align: center; margin-bottom: 12px;">
+                            <span style="background: rgba(0, 229, 255, 0.1); border: 1px solid #00E5FF; color: #00E5FF; padding: 3px 10px; border-radius: 12px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">
+                                COMMUNITY BROADCAST
+                            </span>
+                        </div>
+
+                        <div id="prevEmailSubject" style="font-size: 0.75rem; color: #8B949E; margin-bottom: 10px; font-family: monospace; background: rgba(0,0,0,0.3); padding: 6px 10px; border-radius: 6px;">
+                            Subject: <span style="color: #00E5FF;">Notification Title</span>
+                        </div>
+                        <h4 id="prevEmailHeadline" style="color: white; margin: 0 0 10px 0; font-size: 1.1rem; text-align: center; font-weight: 800;">
+                            Notification Title
+                        </h4>
+                        <p id="prevEmailBody" style="color: #C9D1D9; font-size: 0.85rem; line-height: 1.55; margin: 0 0 18px 0; text-align: left;">
+                            Your notification message will appear here for recipients.
+                        </p>
+                        <div style="text-align: center; margin-bottom: 18px;">
+                            <div id="prevEmailBtn" style="display: inline-block; background: linear-gradient(135deg, #00E5FF 0%, #5C00FF 100%); color: #070B19; font-weight: 800; font-size: 0.85rem; padding: 10px 24px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,229,255,0.4); letter-spacing: 0.5px; text-transform: uppercase;">
+                                Join Broadcast &rarr;
+                            </div>
+                        </div>
+                        <div style="font-size: 0.68rem; color: #8B949E; text-align: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px; line-height: 1.5;">
+                            Sent with &hearts; by <strong>La-Vie Conference</strong> &bull; Life Changers Touch International
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px; font-size: 0.85rem; color: #8b949e; line-height: 1.5;">
+                        💡 <strong>Email Marketing Power:</strong> Combining Mobile Push + HTML Email increases Sunday attendance and tithe/donation engagement by over 3x.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Campaign History Table -->
             <div class="data-table-card">
-                <h3>Recent Users</h3>
+                <h3>Past Multi-Channel Marketing Campaigns</h3>
                 <div style="overflow-x: auto;">
                     <table>
                         <thead>
                             <tr>
-                                <th>Name / Email</th>
-                                <th>Status</th>
+                                <th>Campaign Title</th>
+                                <th>Target Audience</th>
+                                <th>Recipients</th>
+                                <th>Push Sent</th>
+                                <th>Emails Sent</th>
+                                <th>Sent Date</th>
                             </tr>
                         </thead>
-                        <tbody id="recentUsersTableBody">
-                            <!-- Populated by JS -->
+                        <tbody id="campaignHistoryTableBody">
+                            <tr><td colspan="6" style="text-align: center; color: #8b949e;">Loading campaigns...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
+        </div>
 
-            <div class="data-table-card">
-                <h3>Upcoming Meetings</h3>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Title</th>
-                                <th>Date/Time</th>
-                            </tr>
-                        </thead>
-                        <tbody id="upcomingMeetingsTableBody">
-                            <!-- Populated by JS -->
-                        </tbody>
-                    </table>
+        <!-- SUPPORT HELPDESK VIEW -->
+        <div id="helpdeskSection" style="display: none;">
+            <!-- Helpdesk Metric Cards -->
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 24px;">
+                <div class="stat-card" style="border-left: 4px solid #ffaa00;">
+                    <div class="stat-header">
+                        <span class="stat-title">Open Tickets</span>
+                        <span class="material-symbols-outlined stat-icon" style="color: #ffaa00;">mark_email_unread</span>
+                    </div>
+                    <div class="stat-value" id="hdStatOpen" style="color: #ffaa00;">0</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #00e5ff;">
+                    <div class="stat-header">
+                        <span class="stat-title">In Progress</span>
+                        <span class="material-symbols-outlined stat-icon" style="color: #00e5ff;">pending</span>
+                    </div>
+                    <div class="stat-value" id="hdStatInProgress" style="color: #00e5ff;">0</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #00ffa3;">
+                    <div class="stat-header">
+                        <span class="stat-title">Resolved</span>
+                        <span class="material-symbols-outlined stat-icon" style="color: #00ffa3;">check_circle</span>
+                    </div>
+                    <div class="stat-value" id="hdStatResolved" style="color: #00ffa3;">0</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #9b55ff;">
+                    <div class="stat-header">
+                        <span class="stat-title">Total Requests</span>
+                        <span class="material-symbols-outlined stat-icon" style="color: #9b55ff;">contact_support</span>
+                    </div>
+                    <div class="stat-value" id="hdStatTotal">0</div>
+                </div>
+            </div>
+
+            <!-- Helpdesk Workspace Split-Pane -->
+            <div style="display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start;">
+                <!-- Left Pane: Ticket Queue & Filters -->
+                <div class="data-table-card" style="padding: 18px; display: flex; flex-direction: column; max-height: calc(100vh - 260px);">
+                    <!-- Filter and Search -->
+                    <div style="margin-bottom: 14px;">
+                        <input type="text" id="hdSearchInput" placeholder="🔍 Search tickets, email, subject..." style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: white; padding: 9px 12px; outline: none; font-size: 0.85rem; margin-bottom: 10px;">
+                        
+                        <div style="display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;">
+                            <button type="button" class="hd-filter-btn active" data-filter="all" style="background: rgba(0,229,255,0.2); color: #00e5ff; border: 1px solid #00e5ff; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                                All
+                            </button>
+                            <button type="button" class="hd-filter-btn" data-filter="open" style="background: rgba(255,255,255,0.05); color: #8b949e; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                                🟡 Open
+                            </button>
+                            <button type="button" class="hd-filter-btn" data-filter="in_progress" style="background: rgba(255,255,255,0.05); color: #8b949e; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                                🔵 In Progress
+                            </button>
+                            <button type="button" class="hd-filter-btn" data-filter="resolved" style="background: rgba(255,255,255,0.05); color: #8b949e; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                                🟢 Resolved
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Ticket List -->
+                    <div id="hdTicketList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px;">
+                        <div style="text-align: center; color: #8b949e; padding: 30px 0;">Loading support tickets...</div>
+                    </div>
+                </div>
+
+                <!-- Right Pane: Conversation & Reply -->
+                <div class="stat-card" style="padding: 24px; min-height: 520px; display: flex; flex-direction: column;" id="hdDetailPane">
+                    <div id="hdEmptyState" style="margin: auto; text-align: center; color: #8b949e;">
+                        <span class="material-symbols-outlined" style="font-size: 48px; color: rgba(255,255,255,0.15); display: block; margin-bottom: 12px;">mark_chat_unread</span>
+                        <h4 style="color: white; margin: 0 0 6px 0;">Select a Support Ticket</h4>
+                        <p style="font-size: 0.85rem; max-width: 320px; margin: 0 auto;">Click on any ticket in the queue on the left to view customer conversation and reply directly.</p>
+                    </div>
+
+                    <div id="hdActiveContent" style="display: none; flex-direction: column; flex: 1;">
+                        <!-- Ticket Header -->
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px; margin-bottom: 16px;">
+                            <div>
+                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+                                    <span id="hdDetailTicketId" style="color: #00e5ff; font-weight: 800; font-size: 1.05rem; font-family: monospace;">TICK-00000</span>
+                                    <span id="hdDetailCategory" style="background: rgba(255,255,255,0.07); color: #c9d1d9; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; text-transform: uppercase; font-weight: 600;">General</span>
+                                    <span id="hdDetailPriority" style="background: rgba(255, 85, 85, 0.15); color: #ff5555; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: bold;">Normal</span>
+                                </div>
+                                <h3 id="hdDetailSubject" style="margin: 0 0 6px 0; color: white; font-size: 1.2rem;">Ticket Subject</h3>
+                                <div style="font-size: 0.82rem; color: #8b949e;">
+                                    Submitted by: <strong id="hdDetailUserName" style="color: white;">User Name</strong> (<span id="hdDetailUserEmail">email@domain.com</span>) &bull; <span id="hdDetailDate">Just now</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Status Selector -->
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label style="font-size: 0.8rem; color: #8b949e;">Status:</label>
+                                <select id="hdStatusSelect" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: white; padding: 6px 10px; font-size: 0.82rem; outline: none; cursor: pointer;">
+                                    <option value="open">🟡 Open</option>
+                                    <option value="in_progress">🔵 In Progress</option>
+                                    <option value="resolved">🟢 Resolved</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Conversation Thread -->
+                        <div id="hdConversationThread" style="flex: 1; overflow-y: auto; max-height: 280px; display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; padding-right: 6px;">
+                            <!-- Injected by JS -->
+                        </div>
+
+                        <!-- Canned Responses Quick Select -->
+                        <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 0.8rem; color: #00e5ff; font-weight: 600; white-space: nowrap; display: flex; align-items: center; gap: 4px;">
+                                <span class="material-symbols-outlined" style="font-size: 18px;">bolt</span> Quick Response:
+                            </span>
+                            <select id="hdCannedSelect" style="flex: 1; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: #c9d1d9; padding: 6px 10px; font-size: 0.8rem; outline: none;">
+                                <option value="">-- Choose a template to auto-fill message --</option>
+                                <option value="mic_cam_perm">🎤 Fix Microphone &amp; Camera Permissions (Browser/Android)</option>
+                                <option value="stream_setup">📡 OBS / vMix RTMP Stream Key &amp; Destination Setup</option>
+                                <option value="upgrade_plan">💎 Ministry &amp; Pro Plan Upgrades &amp; Features</option>
+                                <option value="resolved_msg">✅ Issue Resolved &bull; Follow-up Satisfaction Check</option>
+                            </select>
+                        </div>
+
+                        <!-- Reply Composer Form -->
+                        <form id="hdReplyForm" style="display: flex; flex-direction: column; gap: 10px;">
+                            <textarea id="hdReplyMessage" required rows="3" placeholder="Type your official reply to the user... (This will automatically send a branded HTML email + in-app notification)" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: white; padding: 12px; font-size: 0.88rem; outline: none; resize: vertical;"></textarea>
+                            
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <label style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #8b949e; cursor: pointer;">
+                                    <input type="checkbox" id="hdResolveOnReply" checked style="accent-color: #00ffa3;">
+                                    Mark ticket as <strong>In Progress</strong> / <strong>Resolved</strong> on send
+                                </label>
+
+                                <button type="submit" id="hdSendReplyBtn" style="background: linear-gradient(135deg, #00e5ff, #5c00ff); color: white; font-weight: bold; border: none; padding: 10px 22px; border-radius: 8px; font-size: 0.88rem; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.2s;">
+                                    <span class="material-symbols-outlined" style="font-size: 18px;">send</span>
+                                    Dispatch Reply &amp; Email
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </div>
         </div>

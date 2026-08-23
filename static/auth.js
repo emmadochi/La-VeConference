@@ -17,6 +17,9 @@ const authSubmitBtn = document.getElementById("authSubmitBtn");
 const googleAuthBtn = document.getElementById("googleAuthBtn");
 const switchAuthMode = document.getElementById("switchAuthMode");
 const authError = document.getElementById("authError");
+const authSuccess = document.getElementById("authSuccess");
+const forgotPasswordLink = document.getElementById("forgotPasswordLink");
+const forgotPasswordContainer = document.getElementById("forgotPasswordContainer");
 
 // State
 let isLoginMode = true;
@@ -28,7 +31,14 @@ function openAuthModal(loginMode = true) {
     authSubmitBtn.textContent = isLoginMode ? "Submit" : "Create Account";
     switchAuthMode.textContent = isLoginMode ? "Sign up" : "Log in";
     switchAuthMode.parentElement.firstChild.textContent = isLoginMode ? "Don't have an account? " : "Already have an account? ";
-    authError.textContent = "";
+    if (forgotPasswordContainer) {
+        forgotPasswordContainer.style.display = isLoginMode ? "block" : "none";
+    }
+    if (authError) authError.textContent = "";
+    if (authSuccess) {
+        authSuccess.textContent = "";
+        authSuccess.style.display = "none";
+    }
     authModal.style.display = "flex";
 }
 window.openAuthModal = openAuthModal;
@@ -36,6 +46,37 @@ window.openAuthModal = openAuthModal;
 // Event Listeners
 loginBtn.addEventListener("click", () => openAuthModal(true));
 signupBtn.addEventListener("click", () => openAuthModal(false));
+
+if (forgotPasswordLink) {
+    forgotPasswordLink.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const email = authEmail.value.trim();
+        if (authError) authError.textContent = "";
+        if (authSuccess) {
+            authSuccess.textContent = "";
+            authSuccess.style.display = "none";
+        }
+
+        if (!email) {
+            if (authError) authError.textContent = "Please enter your email above to receive a reset link.";
+            authEmail.focus();
+            return;
+        }
+
+        try {
+            forgotPasswordLink.textContent = "Sending link...";
+            await fbFunctions.sendPasswordResetEmail(auth, email);
+            if (authSuccess) {
+                authSuccess.textContent = `Password reset link sent to ${email}! Check your inbox.`;
+                authSuccess.style.display = "block";
+            }
+        } catch (err) {
+            if (authError) authError.textContent = err.message || "Failed to send password reset email.";
+        } finally {
+            forgotPasswordLink.textContent = "Forgot password?";
+        }
+    });
+}
 
 switchAuthMode.addEventListener("click", (e) => {
     e.preventDefault();
@@ -96,14 +137,12 @@ if (googleAuthBtn) {
             googleAuthBtn.disabled = true;
             authError.textContent = "";
             const provider = new fbFunctions.GoogleAuthProvider();
-            provider.addScope('https://www.googleapis.com/auth/calendar.events');
             
             const result = await fbFunctions.signInWithPopup(auth, provider);
             
-            // Get the Google Access Token to use with the Calendar API
+            // Get the Google Access Token if available
             const credential = fbFunctions.GoogleAuthProvider.credentialFromResult(result);
             if (credential && credential.accessToken) {
-                // Store temporarily in localStorage to be used by the scheduling logic
                 localStorage.setItem('google_calendar_token', credential.accessToken);
             }
             

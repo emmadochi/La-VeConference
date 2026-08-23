@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'screens/login_screen.dart';
 import 'main_layout.dart';
 import 'services/notification_service.dart';
+import 'package:flutter/foundation.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -16,20 +17,34 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
   
   // Initialize notifications
   final notificationService = NotificationService();
   await notificationService.init();
   await notificationService.requestPermissions();
   
-  // Initialize Firebase (will throw error if google-services.json is missing)
+  // Initialize Firebase with fallback options for Desktop platforms
   try {
-    await Firebase.initializeApp();
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: const FirebaseOptions(
+          apiKey: 'AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo',
+          appId: '1:563333021985:android:a299708fe90284e7a13e60',
+          messagingSenderId: '563333021985',
+          projectId: 'lifeconference-e0add',
+          storageBucket: 'lifeconference-e0add.firebasestorage.app',
+        ),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    }
   } catch (e) {
     debugPrint("Firebase init error: $e");
   }
@@ -59,9 +74,9 @@ class LaVieApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFF070B19),
         fontFamily: 'Inter',
       ),
-      home: FirebaseAuth.instance.currentUser == null 
-          ? const LoginScreen() 
-          : const MainLayout(),
+      home: (Firebase.apps.isNotEmpty && FirebaseAuth.instance.currentUser != null)
+          ? const MainLayout()
+          : const LoginScreen(),
     );
   }
 }
