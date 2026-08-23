@@ -75,11 +75,21 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   Set<String> _raisedHands = {};
   Map<String, String> _activeReactions = {};
 
+  bool _isFullScreen = false;
+  bool _showFullScreenControls = true;
+  Timer? _fullScreenControlsTimer;
+
   @override
   void initState() {
     super.initState();
     _isMuted = !widget.initialAudioOn;
     _isVideoOff = !widget.initialVideoOn;
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _connectToRoom();
   }
 
@@ -356,12 +366,69 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   @override
   void dispose() {
     _networkPoorTimer?.cancel();
+    _fullScreenControlsTimer?.cancel();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     _chatController.dispose();
     _messagesNotifier.dispose();
     _listener.dispose();
     _room.disconnect().catchError((_) {});
     _room.dispose();
     super.dispose();
+  }
+
+  void _toggleFullScreen({Participant? participant}) {
+    if (participant != null && _pinnedParticipant != participant) {
+      _pinnedParticipant = participant;
+    }
+    setState(() {
+      _isFullScreen = !_isFullScreen;
+      _showFullScreenControls = true;
+    });
+
+    if (_isFullScreen) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      _fullScreenControlsTimer?.cancel();
+      _fullScreenControlsTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted && _isFullScreen) {
+          setState(() {
+            _showFullScreenControls = false;
+          });
+        }
+      });
+    } else {
+      _fullScreenControlsTimer?.cancel();
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  void _onFullScreenTap() {
+    setState(() {
+      _showFullScreenControls = !_showFullScreenControls;
+    });
+    if (_showFullScreenControls) {
+      _fullScreenControlsTimer?.cancel();
+      _fullScreenControlsTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted && _isFullScreen) {
+          setState(() {
+            _showFullScreenControls = false;
+          });
+        }
+      });
+    }
   }
 
   void _sendReaction(String emoji) async {
@@ -1420,6 +1487,10 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
 
 
   Widget build(BuildContext context) {
+    if (_isFullScreen) {
+      return _buildFullScreenView();
+    }
+
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Color(0xFF070B19),
@@ -1586,6 +1657,22 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            GestureDetector(
+                              onTap: () => _toggleFullScreen(),
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                                  color: const Color(0xFF00E5FF),
+                                  size: 24,
+                                ),
+                              ),
+                            ),
                             GestureDetector(
                               onTap: () => SimplePip().enterPipMode(),
                               child: Container(
@@ -1826,15 +1913,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
     
     return GestureDetector(
-      onDoubleTap: () {
-        setState(() {
-          if (_pinnedParticipant == p) {
-            _pinnedParticipant = null;
-          } else {
-            _pinnedParticipant = p;
-          }
-        });
-      },
+      onDoubleTap: () => _toggleFullScreen(participant: p),
       child: Container(
         decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
@@ -1926,22 +2005,66 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                 ],
               ),
             ),
-            if (_raisedHands.contains(p.identity))
-              Positioned(
-                top: 16,
-                right: 16,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.amber,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4, offset: const Offset(0, 2)),
-                    ],
+            // Top-right action buttons (Hand Raise, Pin, Fullscreen)
+            Positioned(
+              top: 14,
+              right: 14,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_raisedHands.contains(p.identity))
+                    Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.amber,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4, offset: const Offset(0, 2)),
+                        ],
+                      ),
+                      child: const Icon(Icons.front_hand, color: Colors.white, size: 14),
+                    ),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (_pinnedParticipant == p) {
+                          _pinnedParticipant = null;
+                        } else {
+                          _pinnedParticipant = p;
+                        }
+                      });
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: _pinnedParticipant == p ? const Color(0xFF00E5FF) : Colors.black54,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Icon(
+                        _pinnedParticipant == p ? Icons.push_pin : Icons.push_pin_outlined,
+                        color: _pinnedParticipant == p ? Colors.black : Colors.white70,
+                        size: 14,
+                      ),
+                    ),
                   ),
-                  child: const Icon(Icons.front_hand, color: Colors.white, size: 20),
-                ),
+                  GestureDetector(
+                    onTap: () => _toggleFullScreen(participant: p),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: const Icon(Icons.fullscreen, color: Color(0xFF00E5FF), size: 14),
+                    ),
+                  ),
+                ],
               ),
+            ),
             if (_activeReactions.containsKey(p.identity))
               Positioned(
                 bottom: 20,
@@ -2156,4 +2279,208 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
       ],
     );
   }
+
+  // --- FULL SCREEN LANDSCAPE IMMERSIVE VIEW ---
+  Widget _buildFullScreenView() {
+    final allParticipants = <Participant>[
+      if (_room.localParticipant != null) _room.localParticipant!,
+      ..._room.remoteParticipants.values,
+    ];
+    Participant? primary = _pinnedParticipant;
+    if (primary == null || !allParticipants.contains(primary)) {
+      if (_activeSpeakerIdentity != null) {
+        primary = allParticipants.where((p) => p.identity == _activeSpeakerIdentity).firstOrNull;
+      }
+      primary ??= allParticipants.firstOrNull;
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: _onFullScreenTap,
+        onDoubleTap: () => _toggleFullScreen(),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Video stream full bleed
+            if (primary != null)
+              _buildFullScreenVideo(primary)
+            else
+              const Center(child: Text('Waiting for video...', style: TextStyle(color: Colors.white54))),
+
+            // Floating Top Bar
+            AnimatedOpacity(
+              opacity: _showFullScreenControls ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 250),
+              child: IgnorePointer(
+                ignoring: !_showFullScreenControls,
+                child: SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.videocam, color: Color(0xFF00E5FF), size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  primary != null
+                                      ? (primary == _room.localParticipant
+                                          ? 'You'
+                                          : (primary.name.isNotEmpty ? primary.name : 'Participant'))
+                                      : widget.roomName,
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                onTap: _flipCamera,
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  margin: const EdgeInsets.only(right: 10),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white12),
+                                  ),
+                                  child: const Icon(Icons.flip_camera_ios, color: Color(0xFF00E5FF), size: 20),
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () => _toggleFullScreen(),
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF00E5FF).withOpacity(0.2),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: const Color(0xFF00E5FF)),
+                                  ),
+                                  child: const Icon(Icons.fullscreen_exit, color: Color(0xFF00E5FF), size: 22),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // Floating Bottom Controls
+            AnimatedOpacity(
+              opacity: _showFullScreenControls ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 250),
+              child: IgnorePointer(
+                ignoring: !_showFullScreenControls,
+                child: SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(30),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.65),
+                              borderRadius: BorderRadius.circular(30),
+                              border: Border.all(color: Colors.white.withOpacity(0.15)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(_isMuted ? Icons.mic_off : Icons.mic,
+                                      color: _isMuted ? Colors.white54 : const Color(0xFF00E5FF)),
+                                  onPressed: _toggleMute,
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: Icon(_isVideoOff ? Icons.videocam_off : Icons.videocam,
+                                      color: _isVideoOff ? Colors.white54 : const Color(0xFF00E5FF)),
+                                  onPressed: _toggleVideo,
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.chat_bubble_outline, color: Color(0xFF00E5FF)),
+                                  onPressed: _toggleChat,
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.front_hand, color: Color(0xFF00E5FF)),
+                                  onPressed: _toggleHandRaise,
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(Icons.call_end, color: Colors.white),
+                                  style: IconButton.styleFrom(backgroundColor: Colors.red),
+                                  onPressed: _leaveRoom,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFullScreenVideo(Participant p) {
+    final screenTrackPub = p.videoTrackPublications.where((pub) => pub.source == TrackSource.screenShareVideo).firstOrNull;
+    final cameraTrackPub = p.videoTrackPublications.where((pub) => pub.source == TrackSource.camera).firstOrNull;
+    final trackPub = screenTrackPub ?? cameraTrackPub ?? p.videoTrackPublications.firstOrNull;
+    final track = trackPub?.track;
+    final isMuted = trackPub?.muted ?? true;
+    final isLocal = p == _room.localParticipant;
+    final forceAvatar = isLocal && _isVideoOff;
+    final showAvatar = forceAvatar || isMuted || track == null || (_isDataSaverMode && !isLocal);
+    final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
+
+    if (showAvatar) {
+      return Center(
+        child: Container(
+          width: 100,
+          height: 100,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)]),
+            boxShadow: [
+              BoxShadow(color: const Color(0xFF00E5FF).withOpacity(0.3), blurRadius: 20, spreadRadius: 4),
+            ],
+          ),
+          child: Center(
+            child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      );
+    }
+    return VideoTrackRenderer(track as VideoTrack);
+  }
 }
+

@@ -873,23 +873,31 @@ if (toggleVmixBtn) {
 
         try {
             const idToken = await getAuthToken();
+            const headers = { 'Content-Type': 'application/json' };
+            if (idToken) {
+                headers['Authorization'] = `Bearer ${idToken}`;
+            }
+
             const res = await fetch('/api/create_ingress', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}`
-                },
+                headers: headers,
                 body: JSON.stringify({ room_id: currentRoom.name })
             });
             const data = await res.json();
-            if (data.status === 'success') {
+            if (res.ok && data.status === 'success') {
                 if (rtmpInput) rtmpInput.value = data.rtmp_url;
                 if (keyInput) keyInput.value = data.stream_key;
+                showToast("vMix RTMP credentials ready!");
             } else {
-                showToast("Failed to fetch vMix credentials.", true);
+                const errorDetail = data.detail || "Failed to fetch vMix credentials.";
+                if (rtmpInput) rtmpInput.value = "Failed to fetch URL";
+                if (keyInput) keyInput.value = "Failed to fetch Key";
+                showToast(errorDetail, true);
             }
         } catch (e) {
             console.error("Error fetching vMix ingress credentials:", e);
+            if (rtmpInput) rtmpInput.value = "Connection error";
+            if (keyInput) keyInput.value = "Connection error";
             showToast("Failed to connect to vMix Ingress service.", true);
         }
     });
