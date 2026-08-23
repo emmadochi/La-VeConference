@@ -262,12 +262,11 @@ async function startCall(roomId) {
         appLayout.style.display = 'flex';
         mediaControls.style.display = 'flex';
         meetingInfo.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.4); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);">
-                <div class="meeting-code" style="margin: 0;">${roomId}</div>
-                <button class="copy-link-btn" title="Copy Meeting Code" onclick="navigator.clipboard.writeText('${roomId}'); window.showToast('Meeting code copied!')" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; padding: 4px; transition: color 0.2s;">
-                    <span class="material-symbols-outlined" style="font-size: 20px;">content_copy</span>
-                </button>
-            </div>
+            <span class="material-symbols-outlined" style="font-size: 18px; color: var(--primary, #00E5FF);">info</span>
+            <span class="meeting-code" style="font-family: monospace; font-size: 0.9rem; letter-spacing: 0.5px; margin: 0 4px;">${roomId}</span>
+            <button class="copy-code-badge-btn" title="Copy Meeting Code" onclick="navigator.clipboard.writeText('${roomId}'); window.showToast('Meeting code copied!')">
+                <span class="material-symbols-outlined" style="font-size: 18px;">content_copy</span>
+            </button>
         `;
         const peerId = Math.random().toString(36).substring(2, 10);
 

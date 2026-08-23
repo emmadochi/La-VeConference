@@ -527,6 +527,7 @@ body {
     flex-direction: column;
     gap: 20px;
     height: 100%;
+    position: relative;
 }
 
 .meeting-area {
@@ -1614,37 +1615,50 @@ video {
    ========================================== */
 .meeting-info-top {
     position: absolute;
-    top: 20px;
-    left: 20px;
-    background: rgba(15, 17, 28, 0.7);
-    padding: 8px 16px;
-    border-radius: 12px;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid var(--glass-border);
+    top: 16px;
+    left: 16px;
+    background: rgba(15, 17, 28, 0.85);
+    padding: 6px 14px;
+    border-radius: 20px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     color: white;
     font-weight: 600;
-    font-size: 0.9rem;
-    z-index: 100;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    font-size: 0.85rem;
+    z-index: 40;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
     display: flex;
     align-items: center;
     gap: 8px;
 }
-.meeting-info-top::before {
-    content: 'info';
-    font-family: 'Material Symbols Outlined';
-    font-size: 1.1rem;
-    color: var(--primary-hover);
+
+.copy-code-badge-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.copy-code-badge-btn:hover {
+    color: var(--primary, #00E5FF);
+    background: rgba(255, 255, 255, 0.1);
 }
 
 @media (max-width: 768px) {
     .meeting-info-top {
-        top: 10px;
-        left: 10px;
+        top: 14px;
+        left: 65px;
         font-size: 0.8rem;
-        padding: 6px 12px;
+        padding: 5px 12px;
     }
+}
     
     .media-controls {
         gap: 8px;
