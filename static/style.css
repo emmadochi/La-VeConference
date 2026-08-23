@@ -3248,7 +3248,35 @@ body.is-native-app .hero-section h1 {
 @keyframes liveBadgePulse {
     0% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.4); }
     70% { box-shadow: 0 0 0 8px rgba(255, 0, 85, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0); }
+/* Meeting Settings Modal */
+.settings-tab-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+}
+
+.settings-tab-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-tab-btn.active {
+    color: var(--primary, #00E5FF);
+    background: rgba(0, 229, 255, 0.12);
+}
+
+.settings-modal-content select.modal-input option {
+    background: #181926;
+    color: #ffffff;
 }
 
 

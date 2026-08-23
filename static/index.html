@@ -326,6 +326,93 @@
             </div>
         </div>
 
+        <!-- Meeting Settings Modal -->
+        <div id="settingsModal" class="modal-overlay" style="display: none; z-index: 9999;">
+            <div class="modal-content" style="text-align: left; max-width: 520px; width: 92%; padding: 24px;">
+                <button class="close-modal" id="closeSettingsModalBtn">&times;</button>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
+                    <span class="material-symbols-outlined" style="color: #00E5FF; font-size: 26px;">settings</span>
+                    <h2 style="margin: 0; font-size: 1.25rem; font-weight: 700; color: #fff;">Meeting Settings</h2>
+                </div>
+
+                <div class="settings-tabs" style="display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;">
+                    <button class="settings-tab-btn active" data-tab="audio">
+                        <span class="material-symbols-outlined" style="font-size: 18px;">mic</span> Audio
+                    </button>
+                    <button class="settings-tab-btn" data-tab="video">
+                        <span class="material-symbols-outlined" style="font-size: 18px;">videocam</span> Video
+                    </button>
+                    <button class="settings-tab-btn" data-tab="general">
+                        <span class="material-symbols-outlined" style="font-size: 18px;">tune</span> General
+                    </button>
+                </div>
+
+                <!-- Audio Tab -->
+                <div class="settings-tab-pane" id="tab-audio">
+                    <div class="settings-group" style="margin-bottom: 16px;">
+                        <label style="display: block; font-size: 0.85rem; color: #00E5FF; margin-bottom: 6px; font-weight: 600;">MICROPHONE</label>
+                        <select id="settingsAudioInputSelect" class="modal-input select-input" style="width: 100%; margin: 0; background: rgba(0,0,0,0.5); color: white; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 10px; cursor: pointer;"></select>
+                    </div>
+
+                    <div class="settings-group" style="margin-bottom: 16px;">
+                        <label style="display: block; font-size: 0.85rem; color: #00E5FF; margin-bottom: 6px; font-weight: 600;">SPEAKER / AUDIO OUTPUT</label>
+                        <select id="settingsAudioOutputSelect" class="modal-input select-input" style="width: 100%; margin: 0; background: rgba(0,0,0,0.5); color: white; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 10px; cursor: pointer;"></select>
+                    </div>
+
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">AI Noise Cancellation</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Suppresses ambient room noise, typing, and echo</div>
+                        </div>
+                        <button id="settingsNoiseToggleBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Toggle</button>
+                    </div>
+                </div>
+
+                <!-- Video Tab -->
+                <div class="settings-tab-pane" id="tab-video" style="display: none;">
+                    <div class="settings-group" style="margin-bottom: 16px;">
+                        <label style="display: block; font-size: 0.85rem; color: #00E5FF; margin-bottom: 6px; font-weight: 600;">CAMERA</label>
+                        <select id="settingsVideoInputSelect" class="modal-input select-input" style="width: 100%; margin: 0; background: rgba(0,0,0,0.5); color: white; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 10px; cursor: pointer;"></select>
+                    </div>
+
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px;">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">Flip Camera (Front/Back)</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Switch between front selfie and back environment cameras</div>
+                        </div>
+                        <button id="settingsFlipCamBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Switch</button>
+                    </div>
+
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">Virtual Backgrounds & Blur</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Apply background blur or custom virtual themes</div>
+                        </div>
+                        <button id="settingsOpenEffectsBtn" class="primary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Choose Effect</button>
+                    </div>
+                </div>
+
+                <!-- General Tab -->
+                <div class="settings-tab-pane" id="tab-general" style="display: none;">
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px;">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">Data Saver Mode</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Optimizes stream bandwidth for low-speed connections</div>
+                        </div>
+                        <button id="settingsDataSaverToggleBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Toggle</button>
+                    </div>
+
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">Copy Meeting Link</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Copy meeting link with room details</div>
+                        </div>
+                        <button id="settingsCopyLinkBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Copy Link</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- vMix Ingest Modal -->
         <div id="vmixModal" class="modal-overlay" style="display: none; z-index: 9999;">
             <div class="modal-content" style="text-align: center; max-width: 480px;">

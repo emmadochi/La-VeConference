@@ -2905,6 +2905,178 @@ if (collapseSidebarBtn && leftSidebarEl) {
     }
 }
 
+// ==========================================
+// MEETING SETTINGS MODAL LOGIC
+// ==========================================
+const navSettingsBtn = document.getElementById('navSettingsBtn');
+const settingsModal = document.getElementById('settingsModal');
+const closeSettingsModalBtn = document.getElementById('closeSettingsModalBtn');
+const settingsAudioInputSelect = document.getElementById('settingsAudioInputSelect');
+const settingsAudioOutputSelect = document.getElementById('settingsAudioOutputSelect');
+const settingsVideoInputSelect = document.getElementById('settingsVideoInputSelect');
+const settingsNoiseToggleBtn = document.getElementById('settingsNoiseToggleBtn');
+const settingsFlipCamBtn = document.getElementById('settingsFlipCamBtn');
+const settingsOpenEffectsBtn = document.getElementById('settingsOpenEffectsBtn');
+const settingsDataSaverToggleBtn = document.getElementById('settingsDataSaverToggleBtn');
+const settingsCopyLinkBtn = document.getElementById('settingsCopyLinkBtn');
+
+function populateSettingsDevices() {
+    // Populate Microphones
+    if (settingsAudioInputSelect) {
+        settingsAudioInputSelect.innerHTML = '';
+        if (availableAudioInputDevices.length > 0) {
+            availableAudioInputDevices.forEach((device, idx) => {
+                const opt = document.createElement('option');
+                opt.value = device.deviceId;
+                opt.textContent = device.label || `Microphone ${idx + 1}`;
+                if (device.deviceId === activeAudioInputDeviceId) opt.selected = true;
+                settingsAudioInputSelect.appendChild(opt);
+            });
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Default Microphone';
+            settingsAudioInputSelect.appendChild(opt);
+        }
+    }
+
+    // Populate Speakers
+    if (settingsAudioOutputSelect) {
+        settingsAudioOutputSelect.innerHTML = '';
+        if (availableAudioOutputDevices.length > 0 && 'setSinkId' in HTMLMediaElement.prototype) {
+            availableAudioOutputDevices.forEach((device, idx) => {
+                const opt = document.createElement('option');
+                opt.value = device.deviceId;
+                opt.textContent = device.label || `Speaker ${idx + 1}`;
+                if (device.deviceId === activeAudioOutputDeviceId) opt.selected = true;
+                settingsAudioOutputSelect.appendChild(opt);
+            });
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'System Default Output';
+            settingsAudioOutputSelect.appendChild(opt);
+        }
+    }
+
+    // Populate Cameras
+    if (settingsVideoInputSelect) {
+        settingsVideoInputSelect.innerHTML = '';
+        if (availableVideoDevices.length > 0) {
+            availableVideoDevices.forEach((device, idx) => {
+                const opt = document.createElement('option');
+                opt.value = device.deviceId;
+                opt.textContent = device.label || `Camera ${idx + 1}`;
+                if (device.deviceId === activeCameraDeviceId) opt.selected = true;
+                settingsVideoInputSelect.appendChild(opt);
+            });
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Default Camera';
+            settingsVideoInputSelect.appendChild(opt);
+        }
+    }
+
+    // Update status buttons text
+    if (settingsNoiseToggleBtn) {
+        settingsNoiseToggleBtn.textContent = isNoiseCancellationEnabled ? 'Enabled' : 'Disabled';
+        settingsNoiseToggleBtn.style.color = isNoiseCancellationEnabled ? '#10b981' : 'white';
+    }
+    if (settingsDataSaverToggleBtn) {
+        const isDataSaver = document.body.classList.contains('data-saver-active');
+        settingsDataSaverToggleBtn.textContent = isDataSaver ? 'Enabled' : 'Disabled';
+        settingsDataSaverToggleBtn.style.color = isDataSaver ? '#10b981' : 'white';
+    }
+}
+
+if (settingsAudioInputSelect) {
+    settingsAudioInputSelect.addEventListener('change', async (e) => {
+        if (e.target.value) {
+            await selectAudioInputDevice(e.target.value);
+        }
+    });
+}
+
+if (settingsAudioOutputSelect) {
+    settingsAudioOutputSelect.addEventListener('change', async (e) => {
+        if (e.target.value) {
+            await selectAudioOutputDevice(e.target.value);
+        }
+    });
+}
+
+if (settingsVideoInputSelect) {
+    settingsVideoInputSelect.addEventListener('change', async (e) => {
+        if (e.target.value) {
+            await selectCameraDevice(e.target.value);
+        }
+    });
+}
+
+if (navSettingsBtn && settingsModal) {
+    navSettingsBtn.addEventListener('click', async () => {
+        if (typeof updateCameraDevicesList === 'function') await updateCameraDevicesList();
+        if (typeof updateAudioDevicesList === 'function') await updateAudioDevicesList();
+        populateSettingsDevices();
+        settingsModal.style.display = 'flex';
+    });
+}
+
+if (closeSettingsModalBtn && settingsModal) {
+    closeSettingsModalBtn.addEventListener('click', () => {
+        settingsModal.style.display = 'none';
+    });
+}
+
+// Settings Tabs Switching
+const settingsTabBtns = document.querySelectorAll('.settings-tab-btn');
+settingsTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        settingsTabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.getAttribute('data-tab');
+        document.querySelectorAll('.settings-tab-pane').forEach(pane => {
+            pane.style.display = pane.id === `tab-${tab}` ? 'block' : 'none';
+        });
+    });
+});
+
+// Settings Quick Actions
+if (settingsNoiseToggleBtn && toggleNoiseBtn) {
+    settingsNoiseToggleBtn.addEventListener('click', () => {
+        toggleNoiseBtn.click();
+        setTimeout(populateSettingsDevices, 100);
+    });
+}
+
+if (settingsFlipCamBtn && flipCameraBtn) {
+    settingsFlipCamBtn.addEventListener('click', () => {
+        flipCameraBtn.click();
+        setTimeout(populateSettingsDevices, 500);
+    });
+}
+
+if (settingsOpenEffectsBtn && effectsModal && settingsModal) {
+    settingsOpenEffectsBtn.addEventListener('click', () => {
+        settingsModal.style.display = 'none';
+        effectsModal.style.display = 'flex';
+    });
+}
+
+if (settingsDataSaverToggleBtn && toggleDataSaverBtn) {
+    settingsDataSaverToggleBtn.addEventListener('click', () => {
+        toggleDataSaverBtn.click();
+        setTimeout(populateSettingsDevices, 100);
+    });
+}
+
+if (settingsCopyLinkBtn && shareLinkBtn) {
+    settingsCopyLinkBtn.addEventListener('click', () => {
+        shareLinkBtn.click();
+    });
+}
+
 // Polls & Q&A Logic
 const showCreatePollBtn = document.getElementById('showCreatePollBtn');
 const pollEmptyState = document.getElementById('pollEmptyState');
