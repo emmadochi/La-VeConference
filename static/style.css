@@ -1658,21 +1658,14 @@ video {
         font-size: 0.8rem;
         padding: 5px 12px;
     }
-}
     
     .media-controls {
         gap: 8px;
         padding: 8px 16px;
-        width: 100%;
+        width: auto;
         max-width: calc(100% - 20px);
-        overflow-x: auto;
-        justify-content: flex-start;
-        scrollbar-width: none; /* Firefox */
-        -ms-overflow-style: none;  /* IE and Edge */
-    }
-    
-    .media-controls::-webkit-scrollbar {
-        display: none; /* Chrome, Safari, Opera */
+        overflow: visible;
+        justify-content: center;
     }
     
     .control-btn {
@@ -3262,6 +3255,9 @@ body.is-native-app .hero-section h1 {
 @keyframes liveBadgePulse {
     0% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.4); }
     70% { box-shadow: 0 0 0 8px rgba(255, 0, 85, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0); }
+}
+
 /* Meeting Settings Modal */
 .settings-tab-btn {
     background: transparent;
