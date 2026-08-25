@@ -171,6 +171,91 @@ function showToast(message, isError = false) {
 }
 window.showToast = showToast;
 
+/**
+ * Universal clipboard copy helper with robust fallbacks.
+ * Works seamlessly on HTTPS, HTTP (local network/IP), Mobile Safari, Android Chrome, and WebViews.
+ */
+async function copyTextToClipboard(text, successMsg = 'Copied to clipboard!', errorMsg = 'Failed to copy.') {
+    if (!text) {
+        if (typeof showToast === 'function') showToast(errorMsg, true);
+        return false;
+    }
+
+    let copied = false;
+
+    // 1. Try modern navigator.clipboard API if available (typically HTTPS / localhost)
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+            await navigator.clipboard.writeText(text);
+            copied = true;
+        } catch (err) {
+            console.warn('navigator.clipboard.writeText failed, trying fallback...', err);
+        }
+    }
+
+    // 2. Fallback using document.execCommand('copy') via temporary textarea
+    if (!copied) {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '0';
+            textarea.style.left = '0';
+            textarea.style.opacity = '0';
+            textarea.style.pointerEvents = 'none';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+            
+            copied = document.execCommand('copy');
+            document.body.removeChild(textarea);
+        } catch (fallbackErr) {
+            console.warn('document.execCommand fallback failed:', fallbackErr);
+        }
+    }
+
+    if (copied) {
+        if (typeof showToast === 'function') showToast(successMsg);
+        return true;
+    } else {
+        // Last resort manual prompt fallback
+        try {
+            window.prompt('Copy to clipboard (Ctrl+C / Cmd+C):', text);
+            if (typeof showToast === 'function') showToast(successMsg);
+            return true;
+        } catch (e) {
+            if (typeof showToast === 'function') showToast(errorMsg, true);
+            return false;
+        }
+    }
+}
+window.copyTextToClipboard = copyTextToClipboard;
+
+function getMeetingShareUrl(rId) {
+    const rid = rId || (currentRoom ? currentRoom.name : null) || pendingRoomId || (new URLSearchParams(window.location.search)).get('room') || '';
+    const origin = window.location.origin;
+    const pathname = window.location.pathname;
+    if (rid) {
+        return `${origin}${pathname}?room=${encodeURIComponent(rid)}`;
+    }
+    return window.location.href;
+}
+window.getMeetingShareUrl = getMeetingShareUrl;
+
+function copyMeetingLink(rId) {
+    const url = getMeetingShareUrl(rId);
+    return copyTextToClipboard(url, 'Meeting link copied to clipboard!');
+}
+window.copyMeetingLink = copyMeetingLink;
+
+function copyMeetingCode(rId) {
+    const rid = rId || (currentRoom ? currentRoom.name : null) || pendingRoomId || (new URLSearchParams(window.location.search)).get('room') || '';
+    return copyTextToClipboard(rid, 'Meeting code copied to clipboard!');
+}
+window.copyMeetingCode = copyMeetingCode;
+
 // --- URL Parsing ---
 window.addEventListener('DOMContentLoaded', () => {
     const qrCodeImg = document.getElementById('qrCodeImg');
@@ -264,7 +349,7 @@ async function startCall(roomId) {
         meetingInfo.innerHTML = `
             <span class="material-symbols-outlined" style="font-size: 18px; color: var(--primary, #00E5FF);">info</span>
             <span class="meeting-code" style="font-family: monospace; font-size: 0.9rem; letter-spacing: 0.5px; margin: 0 4px;">${roomId}</span>
-            <button class="copy-code-badge-btn" title="Copy Meeting Code" onclick="navigator.clipboard.writeText('${roomId}'); window.showToast('Meeting code copied!')">
+            <button class="copy-code-badge-btn" title="Copy Meeting Link" onclick="window.copyMeetingLink('${roomId}')">
                 <span class="material-symbols-outlined" style="font-size: 18px;">content_copy</span>
             </button>
         `;
@@ -910,17 +995,15 @@ if (closeVmixModalBtn) {
 
 if (copyVmixUrlBtn) {
     copyVmixUrlBtn.addEventListener('click', () => {
-        const val = document.getElementById('vmixRtmpUrl').value;
-        navigator.clipboard.writeText(val);
-        showToast("RTMP Server URL copied to clipboard!");
+        const val = document.getElementById('vmixRtmpUrl')?.value || '';
+        copyTextToClipboard(val, "RTMP Server URL copied to clipboard!");
     });
 }
 
 if (copyVmixKeyBtn) {
     copyVmixKeyBtn.addEventListener('click', () => {
-        const val = document.getElementById('vmixStreamKey').value;
-        navigator.clipboard.writeText(val);
-        showToast("Stream Key copied to clipboard!");
+        const val = document.getElementById('vmixStreamKey')?.value || '';
+        copyTextToClipboard(val, "Stream Key copied to clipboard!");
     });
 }
 
@@ -2875,12 +2958,9 @@ if (toggleHandBtn) {
 
 const shareLinkBtn = document.getElementById('shareLinkBtn');
 if (shareLinkBtn) {
-    shareLinkBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(window.location.href).then(() => {
-            if(typeof showToast !== 'undefined') showToast('Meeting link copied to clipboard!');
-        }).catch(err => {
-            if(typeof showToast !== 'undefined') showToast('Failed to copy link.', true);
-        });
+    shareLinkBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyMeetingLink();
         if(moreOptionsMenu) moreOptionsMenu.style.display = 'none';
         if(toggleMoreBtn) toggleMoreBtn.classList.remove('active');
     });
@@ -3085,9 +3165,10 @@ if (settingsDataSaverToggleBtn && toggleDataSaverBtn) {
     });
 }
 
-if (settingsCopyLinkBtn && shareLinkBtn) {
-    settingsCopyLinkBtn.addEventListener('click', () => {
-        shareLinkBtn.click();
+if (settingsCopyLinkBtn) {
+    settingsCopyLinkBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyMeetingLink();
     });
 }
 
