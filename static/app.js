@@ -359,7 +359,17 @@ async function startCall(roomId) {
         const headers = {};
         if (fbToken) { headers['Authorization'] = `Bearer ${fbToken}`; }
 
-        const response = await fetch(`/token/${roomId}/${peerId}?name=${encodeURIComponent(userName)}`, { headers });
+        let response = await fetch(`/token/${roomId}/${peerId}?name=${encodeURIComponent(userName)}`, { headers });
+        if (response.status === 409 || response.status === 403) {
+            const errData = await response.json().catch(() => ({}));
+            const activeRoom = (errData.detail && errData.detail.active_room) ? errData.detail.active_room : 'another meeting';
+            const switchMeeting = confirm(`You are currently active in meeting "${activeRoom}". Would you like to leave it and join "${roomId}"?`);
+            if (switchMeeting) {
+                response = await fetch(`/token/${roomId}/${peerId}?name=${encodeURIComponent(userName)}&force=true`, { headers });
+            } else {
+                throw new Error("Join cancelled: User is active in another meeting.");
+            }
+        }
         if (!response.ok) throw new Error("Failed to get token");
         const { token, is_admin } = await response.json();
         isAdmin = is_admin || false;
@@ -618,9 +628,49 @@ async function startCall(roomId) {
         await currentRoom.connect(livekitUrl, token);
         console.log("Connected to LiveKit!");
 
-        await currentRoom.localParticipant.enableCameraAndMicrophone();
-        await updateCameraDevicesList();
-        await updateAudioDevicesList();
+        let camDenied = false;
+        let micDenied = false;
+
+        try {
+            await currentRoom.localParticipant.setCameraEnabled(true);
+        } catch (camErr) {
+            console.warn("Camera permission denied or unavailable:", camErr);
+            camDenied = true;
+            isCamOff = true;
+            if (toggleCamBtn) {
+                toggleCamBtn.classList.add('active');
+                const icon = toggleCamBtn.querySelector('.material-symbols-outlined');
+                if (icon) icon.textContent = 'videocam_off';
+                const txt = toggleCamBtn.querySelector('.btn-text');
+                if (txt) txt.textContent = 'Camera Off';
+            }
+        }
+
+        try {
+            await currentRoom.localParticipant.setMicrophoneEnabled(true);
+        } catch (micErr) {
+            console.warn("Microphone permission denied or unavailable:", micErr);
+            micDenied = true;
+            isMuted = true;
+            if (toggleMicBtn) {
+                toggleMicBtn.classList.add('active');
+                const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
+                if (icon) icon.textContent = 'mic_off';
+                const txt = toggleMicBtn.querySelector('.btn-text');
+                if (txt) txt.textContent = 'Unmute';
+            }
+        }
+
+        if (camDenied && micDenied) {
+            showToast("Camera & Mic blocked. You joined in listen-only mode.", false);
+        } else if (camDenied) {
+            showToast("Camera blocked. Joined with microphone only.", false);
+        } else if (micDenied) {
+            showToast("Microphone blocked. Joined with camera only.", false);
+        }
+
+        try { await updateCameraDevicesList(); } catch (e) {}
+        try { await updateAudioDevicesList(); } catch (e) {}
 
         try {
             if (supportsBackgroundProcessors()) {

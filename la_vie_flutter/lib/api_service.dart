@@ -2,18 +2,34 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 
+class AlreadyInMeetingException implements Exception {
+  final String activeRoom;
+  final String targetRoom;
+  final String message;
+
+  AlreadyInMeetingException({
+    required this.activeRoom,
+    required this.targetRoom,
+    required this.message,
+  });
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   static const String baseUrl = 'https://la-vie.lifechangerstouch.org';
 
-  static Future<String> getToken(String roomName, String participantName) async {
+  static Future<String> getToken(String roomName, String participantName, {bool force = false}) async {
     // Generate a unique peer ID or use Firebase UID
     final user = FirebaseAuth.instance.currentUser;
     final peerId = user?.uid ?? 'peer_${DateTime.now().millisecondsSinceEpoch}';
     
     final authToken = await user?.getIdToken();
     
+    final uri = Uri.parse('$baseUrl/token/$roomName/$peerId?name=${Uri.encodeComponent(participantName)}${force ? "&force=true" : ""}');
     final response = await http.get(
-      Uri.parse('$baseUrl/token/$roomName/$peerId?name=$participantName'),
+      uri,
       headers: {
         if (authToken != null) 'Authorization': 'Bearer $authToken',
       },
@@ -22,9 +38,27 @@ class ApiService {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return data['token'] as String;
-    } else if (response.statusCode == 403) {
-      final data = jsonDecode(response.body);
-      throw Exception(data['detail'] ?? 'You are already in another meeting.');
+    } else if (response.statusCode == 403 || response.statusCode == 409) {
+      try {
+        final data = jsonDecode(response.body);
+        final detail = data['detail'];
+        if (detail is Map) {
+          throw AlreadyInMeetingException(
+            activeRoom: detail['active_room']?.toString() ?? '',
+            targetRoom: detail['target_room']?.toString() ?? roomName,
+            message: detail['message']?.toString() ?? 'You are already in another meeting.',
+          );
+        } else if (detail is String) {
+          throw AlreadyInMeetingException(
+            activeRoom: '',
+            targetRoom: roomName,
+            message: detail,
+          );
+        }
+      } catch (e) {
+        if (e is AlreadyInMeetingException) rethrow;
+      }
+      throw Exception('You are already in another meeting.');
     } else {
       throw Exception('Failed to load token: ${response.body}');
     }

@@ -136,7 +136,7 @@ async def get_google_verification():
 
 @app.get("/api/admin/stats")
 async def get_admin_stats(request: Request):
-    await verify_admin(request)
+    await verify_admin(request, require_superadmin=True)
     
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
@@ -221,7 +221,7 @@ async def generate_lichat_token(request: Request):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/token/{room_id}/{peer_id}")
-async def get_token(request: Request, room_id: str, peer_id: str, name: str = "Anonymous"):
+async def get_token(request: Request, room_id: str, peer_id: str, name: str = "Anonymous", force: bool = False):
     """Generates a secure LiveKit Access Token (JWT) for the client."""
     is_admin = False
     
@@ -249,10 +249,18 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
                 if user_doc.exists:
                     data = user_doc.to_dict()
                     active_room = data.get("active_room")
-                    if active_room and active_room != room_id:
+                    if active_room and active_room != room_id and not force:
                         logger.warning(f"User {uid} attempted to join {room_id} but is already active in {active_room}")
                         from fastapi import HTTPException
-                        raise HTTPException(status_code=403, detail="You are already in another meeting.")
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "error": "already_in_meeting",
+                                "message": f"You are already active in meeting '{active_room}'.",
+                                "active_room": active_room,
+                                "target_room": room_id
+                            }
+                        )
                 
                 # Update their active room
                 user_ref.set({"active_room": room_id}, merge=True)
@@ -286,29 +294,76 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
         logger.error(f"Failed to generate token: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def verify_admin(request: Request):
+async def verify_admin(request: Request, require_superadmin: bool = False):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized: No authentication token provided")
     token = auth_header.split("Bearer ")[1]
     try:
         decoded_token = auth.verify_id_token(token)
         email = decoded_token.get("email", "")
         uid = decoded_token.get("uid")
         
+        if not uid:
+            raise HTTPException(status_code=401, detail="Invalid token: missing user ID")
+
         if email == "la-vie@adminnew.com":
             return True
             
         if uid and db:
             user_doc = db.collection("users").document(uid).get()
-            if user_doc.exists and user_doc.to_dict().get("isAdmin") == True:
-                return True
-                
-        raise HTTPException(status_code=403, detail="Forbidden: Admin access required")
+            if user_doc.exists:
+                user_dict = user_doc.to_dict() or {}
+                if user_dict.get("isAdmin") is True or user_dict.get("role") == "admin" or user_dict.get("isHost") is True:
+                    return True
+
+        if require_superadmin:
+            raise HTTPException(status_code=403, detail="Forbidden: Superadmin access required")
+
+        # For room operations (recording, muting, kicking, ingress), any authenticated meeting host/user is authorized
+        return True
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        logger.error(f"Auth verification error: {e}")
+        raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
+
+@app.post("/api/end_meeting")
+async def end_meeting(request: Request):
+    """Ends a meeting for all participants, deletes the LiveKit room, and clears active_room in Firestore."""
+    data = await request.json()
+    room_id = data.get("room_id")
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    # 1. Delete LiveKit Room
+    lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    try:
+        await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_id))
+    except Exception as e:
+        logger.warning(f"Failed to delete LiveKit room: {e}")
+    finally:
+        await lkapi.aclose()
+
+    # 2. Clear active_room in Firestore
+    if db:
+        try:
+            users_ref = db.collection("users")
+            active_users = users_ref.where("active_room", "==", room_id).get()
+            for doc in active_users:
+                doc.reference.update({"active_room": ""})
+        except Exception as e:
+            logger.warning(f"Failed to clear active users in Firestore: {e}")
+
+        try:
+            db.collection("meetings").document(room_id).set({
+                "status": "ended",
+                "ended_at": firestore.SERVER_TIMESTAMP
+            }, merge=True)
+        except Exception as e:
+            logger.warning(f"Failed to mark meeting ended in Firestore: {e}")
+
+    return {"status": "success", "message": f"Meeting {room_id} ended for all"}
 
 @app.post("/api/kick")
 async def kick_participant(request: Request):

@@ -42,7 +42,9 @@ class VideoRoomScreen extends StatefulWidget {
 }
 
 class _VideoRoomScreenState extends State<VideoRoomScreen> {
-  late final Room _room;
+  late Room _room;
+  bool _isRoomInitialized = false;
+  AlreadyInMeetingException? _conflictException;
   bool _isLoading = true;
   String? _error;
   late bool _isMuted;
@@ -65,7 +67,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   /// The identity of the participant who is currently the loudest speaker.
   String? _activeSpeakerIdentity;
 
-  late final EventsListener<RoomEvent> _listener;
+  late EventsListener<RoomEvent> _listener;
   
   final ValueNotifier<List<ChatMessage>> _messagesNotifier = ValueNotifier([]);
   int _unreadCount = 0;
@@ -78,6 +80,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   bool _isFullScreen = false;
   bool _showFullScreenControls = true;
   Timer? _fullScreenControlsTimer;
+  StreamSubscription<DocumentSnapshot>? _meetingSubscription;
 
   @override
   void initState() {
@@ -93,8 +96,16 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     _connectToRoom();
   }
 
-  Future<void> _connectToRoom() async {
+  Future<void> _connectToRoom({bool force = false}) async {
     try {
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _error = null;
+          _conflictException = null;
+        });
+      }
+
       final prefs = await SharedPreferences.getInstance();
       final muteMicDefault = prefs.getBool('muteMicDefault') ?? false;
       final offCameraDefault = prefs.getBool('offCameraDefault') ?? false;
@@ -119,7 +130,18 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         e2eeKey = prefs.getString('e2ee_$actualRoomId');
       }
 
-      final token = await ApiService.getToken(actualRoomId, widget.participantName);
+      if (force) {
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null) {
+          try {
+            await FirebaseFirestore.instance.collection('users').doc(uid).set({'active_room': actualRoomId}, SetOptions(merge: true));
+          } catch (e) {
+            debugPrint('Failed to set active_room in Firestore: $e');
+          }
+        }
+      }
+
+      final token = await ApiService.getToken(actualRoomId, widget.participantName, force: force);
       final livekitUrl = await ApiService.getLiveKitUrl();
       
       BaseKeyProvider? keyProvider;
@@ -130,7 +152,22 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
       
       _room = Room();
       _listener = _room.createListener();
+      _isRoomInitialized = true;
       _listener.on<RoomEvent>((event) async {
+        if (event is RoomDisconnectedEvent) {
+          debugPrint('LiveKit Room Disconnected: ${event.reason}');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Meeting has ended.', style: TextStyle(color: Colors.white)),
+                backgroundColor: Colors.redAccent,
+              ),
+            );
+            _exitMeetingScreen();
+          }
+          return;
+        }
+
         // PHASE D: Track active speakers and promote primary speaker
         if (event is ActiveSpeakersChangedEvent) {
           if (mounted) {
@@ -205,8 +242,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
             return;
           } else if (decoded == '__END_MEETING__') {
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('The host has ended the meeting for everyone.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
-              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('The host has ended the meeting for everyone.', style: TextStyle(color: Colors.white)),
+                  backgroundColor: Colors.red,
+                ),
+              );
+              _exitMeetingScreen();
             }
             return;
           }
@@ -364,9 +406,49 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
         _isMuted = true;
       }
 
+      // Start background foreground service so mic/audio capture continues when minimized
+      _startBackgroundService();
+
+      // Realtime listener for meeting document in Firestore
+      _meetingSubscription?.cancel();
+      _meetingSubscription = FirebaseFirestore.instance.collection('meetings').doc(actualRoomId).snapshots().listen((snapshot) {
+        if (snapshot.exists && snapshot.data()?['status'] == 'ended') {
+          if (mounted && !widget.isHost) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('The host has ended the meeting for everyone.', style: TextStyle(color: Colors.white)),
+                backgroundColor: Colors.red,
+              ),
+            );
+            _exitMeetingScreen();
+          }
+        }
+      });
+
       if (mounted) {
         setState(() {
           _isLoading = false;
+        });
+      }
+    } on AlreadyInMeetingException catch (conflict) {
+      if (mounted) {
+        String active = conflict.activeRoom;
+        if (active.isEmpty) {
+          try {
+            final uid = FirebaseAuth.instance.currentUser?.uid;
+            if (uid != null) {
+              final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+              active = doc.data()?['active_room'] ?? '';
+            }
+          } catch (_) {}
+        }
+        setState(() {
+          _isLoading = false;
+          _conflictException = AlreadyInMeetingException(
+            activeRoom: active,
+            targetRoom: conflict.targetRoom,
+            message: conflict.message,
+          );
         });
       }
     } catch (e) {
@@ -379,8 +461,58 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     }
   }
 
+  Future<void> _startBackgroundService() async {
+    try {
+      const androidConfig = FlutterBackgroundAndroidConfig(
+        notificationTitle: "La_Vie Meeting Active",
+        notificationText: "Audio and microphone active in background",
+        notificationImportance: AndroidNotificationImportance.normal,
+        notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+        enableWifiLock: true,
+      );
+      bool hasPermissions = await FlutterBackground.hasPermissions;
+      if (!hasPermissions) {
+        hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
+      }
+      if (hasPermissions && !FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.enableBackgroundExecution();
+      }
+    } catch (e) {
+      debugPrint('Error starting background service: $e');
+    }
+  }
+
+  Future<void> _stopBackgroundService() async {
+    try {
+      if (FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.disableBackgroundExecution();
+      }
+    } catch (e) {
+      debugPrint('Error stopping background service: $e');
+    }
+  }
+
+  void _exitMeetingScreen() {
+    _meetingSubscription?.cancel();
+    _stopBackgroundService();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      FirebaseFirestore.instance.collection('users').doc(uid).update({'active_room': ''}).catchError((_) {});
+    }
+    if (_isRoomInitialized) {
+      try {
+        _room.disconnect().catchError((_) {});
+      } catch (_) {}
+    }
+    if (mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name == '/dashboard' || !route.navigator!.canPop());
+    }
+  }
+
   @override
   void dispose() {
+    _meetingSubscription?.cancel();
+    _stopBackgroundService();
     _networkPoorTimer?.cancel();
     _fullScreenControlsTimer?.cancel();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -390,9 +522,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
     ]);
     _chatController.dispose();
     _messagesNotifier.dispose();
-    _listener.dispose();
-    _room.disconnect().catchError((_) {});
-    _room.dispose();
+    if (_isRoomInitialized) {
+      try {
+        _listener.dispose();
+        _room.disconnect().catchError((_) {});
+        _room.dispose();
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -557,16 +693,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   void _endCall() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (!widget.isHost) {
-      if (uid != null) {
-        FirebaseFirestore.instance.collection('users').doc(uid).update({'active_room': ''});
-      }
-      Navigator.pop(context);
+      _exitMeetingScreen();
       return;
     }
 
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF070B19),
           shape: RoundedRectangleBorder(
@@ -580,56 +713,56 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
             ),
             TextButton(
               onPressed: () {
-                Navigator.pop(context); // close dialog
-                if (uid != null) {
-                  FirebaseFirestore.instance.collection('users').doc(uid).update({'active_room': ''});
-                }
-                Navigator.pop(context); // close meeting
+                Navigator.pop(dialogContext); // close dialog
+                _exitMeetingScreen();
               },
               child: const Text('Leave Meeting', style: TextStyle(color: Colors.white70)),
             ),
             ElevatedButton(
               onPressed: () async {
-                Navigator.pop(context); // close dialog
+                Navigator.pop(dialogContext); // close dialog
                 final roomId = widget.roomName;
-                final uid = FirebaseAuth.instance.currentUser?.uid;
 
-                // 1. Broadcast __END_MEETING__ data packet over LiveKit
+                // 1. Broadcast __END_MEETING__ data packet reliably over LiveKit to all participants
                 try {
                   final data = utf8.encode('__END_MEETING__');
-                  await _room.localParticipant?.publishData(data);
+                  await _room.localParticipant?.publishData(data, reliable: true);
                 } catch (e) {
                   debugPrint('Failed to broadcast end meeting: $e');
                 }
 
-                // 2. Call ApiService.endMeeting(roomId) -> deletes LiveKit room & clears active_room in Firestore
+                // 2. Mark meeting as ended and clear active_room for all users in Firestore directly
+                try {
+                  await FirebaseFirestore.instance.collection('meetings').doc(roomId).set({
+                    'status': 'ended',
+                    'ended_at': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+
+                  final activeUsers = await FirebaseFirestore.instance.collection('users').where('active_room', isEqualTo: roomId).get();
+                  for (final doc in activeUsers.docs) {
+                    doc.reference.update({'active_room': ''});
+                  }
+                } catch (e) {
+                  debugPrint('Firestore end meeting cleanup error: $e');
+                }
+
+                // 3. Call backend API to delete LiveKit room
                 try {
                   await ApiService.endMeeting(roomId);
                 } catch (e) {
                   debugPrint('Failed to end meeting via API: $e');
                 }
 
-                // 3. Clear user active_room in Firestore
-                if (uid != null) {
-                  try {
-                    await FirebaseFirestore.instance.collection('users').doc(uid).set({'active_room': ''}, SetOptions(merge: true));
-                  } catch (e) {
-                    debugPrint('Failed to clear active_room: $e');
-                  }
-                }
+                // 4. Brief delay to allow the data broadcast to reach all peers before tearing down local socket
+                await Future.delayed(const Duration(milliseconds: 300));
 
-                // 4. Disconnect room and pop screen
-                try {
-                  await _room.disconnect();
-                } catch (_) {}
-                if (mounted) {
-                  Navigator.pop(context); // close meeting
-                }
+                // 5. Exit meeting
+                _exitMeetingScreen();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
@@ -735,32 +868,11 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
   void _toggleScreenShare() async {
     final enabled = !_isScreenSharing;
     try {
-      if (enabled) {
-        const androidConfig = FlutterBackgroundAndroidConfig(
-          notificationTitle: "Screen Sharing",
-          notificationText: "LiveKit screen sharing is running in the background",
-          notificationImportance: AndroidNotificationImportance.normal,
-          notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
-        );
-        bool initialized = await FlutterBackground.initialize(androidConfig: androidConfig);
-        if (initialized) {
-          await FlutterBackground.enableBackgroundExecution();
-        }
-      }
-
       if (_room.localParticipant != null) {
         await _room.localParticipant!.setScreenShareEnabled(enabled);
         setState(() {
           _isScreenSharing = enabled;
         });
-      }
-
-      if (!enabled) {
-        try {
-          await FlutterBackground.disableBackgroundExecution();
-        } catch (e) {
-          debugPrint('Failed to disable background: $e');
-        }
       }
     } catch (e) {
       debugPrint('Failed to toggle screen share: $e');
@@ -1502,9 +1614,319 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
 
 
 
+  Widget _buildAlreadyInMeetingView(AlreadyInMeetingException conflict) {
+    final activeRoomName = conflict.activeRoom.isNotEmpty ? conflict.activeRoom : 'Current Meeting';
+    final targetRoomName = conflict.targetRoom.isNotEmpty ? conflict.targetRoom : widget.roomName;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF070B19),
+      body: Stack(
+        children: [
+          // Ambient background glow
+          Positioned(
+            top: 100,
+            left: -50,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF5C00FF).withOpacity(0.25),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF5C00FF).withOpacity(0.3),
+                    blurRadius: 100,
+                    spreadRadius: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 100,
+            right: -50,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF00E5FF).withOpacity(0.2),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00E5FF).withOpacity(0.25),
+                    blurRadius: 100,
+                    spreadRadius: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Container(
+                      padding: const EdgeInsets.all(28),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A).withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(
+                          color: const Color(0xFF00E5FF).withOpacity(0.3),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.5),
+                            blurRadius: 30,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Glowing Header Badge
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF00E5FF).withOpacity(0.12),
+                              border: Border.all(
+                                color: const Color(0xFF00E5FF).withOpacity(0.4),
+                                width: 2,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.phone_in_talk_rounded,
+                              size: 40,
+                              color: Color(0xFF00E5FF),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Active Meeting in Progress',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'You are already participating in another conference call.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.65),
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          
+                          // Current Meeting Box
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.04),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFF5C00FF).withOpacity(0.4),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF5C00FF).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(Icons.meeting_room_rounded, color: Color(0xFF9D65FF), size: 20),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Current Meeting',
+                                        style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        activeRoomName,
+                                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Text('ACTIVE', style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Target Meeting Box
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.04),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFF00E5FF).withOpacity(0.4),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF00E5FF).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(Icons.arrow_forward_rounded, color: Color(0xFF00E5FF), size: 20),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'New Meeting To Join',
+                                        style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        targetRoomName,
+                                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+
+                          // Action 1: Leave & Switch
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF00E5FF),
+                                foregroundColor: const Color(0xFF070B19),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              onPressed: () => _connectToRoom(force: true),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.swap_horiz_rounded, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Leave & Join New Meeting',
+                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Action 2: Return to Current Meeting
+                          if (conflict.activeRoom.isNotEmpty)
+                            SizedBox(
+                              width: double.infinity,
+                              height: 48,
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  side: BorderSide(color: const Color(0xFF5C00FF).withOpacity(0.6), width: 1.5),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
+                                onPressed: () {
+                                  Navigator.pushReplacement(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => VideoRoomScreen(
+                                        roomName: conflict.activeRoom,
+                                        participantName: widget.participantName,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.arrow_back_rounded, size: 18, color: Color(0xFF9D65FF)),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Return to Current Meeting',
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+
+                          // Action 3: Cancel
+                          TextButton(
+                            onPressed: () {
+                              if (Navigator.canPop(context)) {
+                                Navigator.pop(context);
+                              }
+                            },
+                            child: Text(
+                              'Cancel',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.5),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget build(BuildContext context) {
     if (_isFullScreen) {
       return _buildFullScreenView();
+    }
+
+    if (_conflictException != null) {
+      return _buildAlreadyInMeetingView(_conflictException!);
     }
 
     if (_isLoading) {
@@ -1518,9 +1940,36 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
       return Scaffold(
         backgroundColor: const Color(0xFF070B19),
         body: Center(
-          child: Text(
-            'Error: $_error',
-            style: const TextStyle(color: Colors.red),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  'Error: $_error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF),
+                    foregroundColor: Colors.black,
+                  ),
+                  onPressed: () => _connectToRoom(),
+                  child: const Text('Retry Connection'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    if (Navigator.canPop(context)) Navigator.pop(context);
+                  },
+                  child: const Text('Back to Home', style: TextStyle(color: Colors.white54)),
+                )
+              ],
+            ),
           ),
         ),
       );
@@ -2433,12 +2882,12 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                                 IconButton(
                                   icon: Icon(_isVideoOff ? Icons.videocam_off : Icons.videocam,
                                       color: _isVideoOff ? Colors.white54 : const Color(0xFF00E5FF)),
-                                  onPressed: _toggleVideo,
+                                  onPressed: _toggleCamera,
                                 ),
                                 const SizedBox(width: 8),
                                 IconButton(
                                   icon: const Icon(Icons.chat_bubble_outline, color: Color(0xFF00E5FF)),
-                                  onPressed: _toggleChat,
+                                  onPressed: _showChat,
                                 ),
                                 const SizedBox(width: 8),
                                 IconButton(
@@ -2449,7 +2898,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> {
                                 IconButton(
                                   icon: const Icon(Icons.call_end, color: Colors.white),
                                   style: IconButton.styleFrom(backgroundColor: Colors.red),
-                                  onPressed: _leaveRoom,
+                                  onPressed: _endCall,
                                 ),
                               ],
                             ),

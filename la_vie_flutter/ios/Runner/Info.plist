@@ -45,5 +45,16 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>La_Vie requires microphone access for audio and video calls, including when minimized or running in the background.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>La_Vie requires camera access for video calls.</string>
 </dict>
 </plist>
