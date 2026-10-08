@@ -99,11 +99,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (prefs == null || !mounted) return;
 
     bool isHost = false;
+    String? meetingTitle;
     if (user != null) {
       try {
-        final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: code).limit(1).get();
-        if (query.docs.isNotEmpty) {
-          isHost = query.docs.first.data()['hostId'] == user.uid;
+        final docDirect = await FirebaseFirestore.instance.collection('meetings').doc(code).get();
+        if (docDirect.exists && docDirect.data() != null) {
+          final data = docDirect.data()!;
+          isHost = data['hostId'] == user.uid;
+          meetingTitle = data['title'] as String?;
+        } else {
+          final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: code).limit(1).get();
+          if (query.docs.isNotEmpty) {
+            final data = query.docs.first.data();
+            isHost = data['hostId'] == user.uid;
+            meetingTitle = data['title'] as String?;
+          }
         }
       } catch (e) {
         debugPrint('Failed to check host status: $e');
@@ -115,6 +125,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       MaterialPageRoute(
         builder: (context) => VideoRoomScreen(
           roomName: code,
+          meetingTitle: meetingTitle,
           participantName: displayName,
           initialAudioOn: prefs['audio'] ?? true,
           initialVideoOn: prefs['video'] ?? true,
@@ -128,9 +139,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final roomId = _generateRoomCode();
     final user = FirebaseAuth.instance.currentUser;
     final displayName = user?.displayName ?? 'Premium User';
+    final defaultTitle = "$displayName's Meeting";
     
-    final prefs = await showPreJoinDialog(context, isCreating: true);
+    final prefs = await showPreJoinDialog(context, isCreating: true, defaultMeetingTitle: defaultTitle);
     if (prefs == null) return;
+
+    final meetingTitle = (prefs['title'] is String && (prefs['title'] as String).trim().isNotEmpty)
+        ? (prefs['title'] as String).trim()
+        : defaultTitle;
+
+    try {
+      final e2eeKey = _generateE2EEKey();
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('e2ee_$roomId', e2eeKey);
+
+      final meeting = Meeting(
+        id: roomId,
+        title: meetingTitle,
+        roomId: roomId,
+        hostId: user?.uid ?? '',
+        scheduledTime: DateTime.now(),
+      );
+      await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Failed to save instant meeting to Firestore: $e');
+    }
 
     if (!mounted) return;
     Navigator.push(
@@ -138,6 +171,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       MaterialPageRoute(
         builder: (context) => VideoRoomScreen(
           roomName: roomId,
+          meetingTitle: meetingTitle,
           participantName: displayName,
           initialAudioOn: prefs['audio'] ?? true,
           initialVideoOn: prefs['video'] ?? true,
@@ -463,14 +497,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   final hostId = FirebaseAuth.instance.currentUser?.uid ?? '';
 
                                   final meeting = Meeting(
-                                    id: '',
+                                    id: roomId,
                                     title: title,
                                     roomId: roomId,
                                     hostId: hostId,
                                     scheduledTime: scheduledDateTime,
                                   );
 
-                                  await FirebaseFirestore.instance.collection('meetings').add(meeting.toFirestore());
+                                  await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
 
                                   final notificationId = roomId.hashCode;
                                   NotificationService().showImmediateNotification(
@@ -540,13 +574,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await prefs.setString('e2ee_$roomId', e2eeKey);
 
     final meeting = Meeting(
-      id: '',
+      id: roomId,
       title: '$displayName\'s Meeting',
       roomId: roomId,
       hostId: hostId,
       scheduledTime: DateTime.now(),
     );
-    await FirebaseFirestore.instance.collection('meetings').add(meeting.toFirestore());
+    await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
 
     final meetingLink = 'https://la-vie.lifechangerstouch.org/?room=$roomId#$e2eeKey';
 
@@ -818,11 +852,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 if (prefs == null) return;
                                 
                                 bool isHost = false;
+                                String? meetingTitle;
                                 if (user != null) {
                                   try {
-                                    final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: code).limit(1).get();
-                                    if (query.docs.isNotEmpty) {
-                                      isHost = query.docs.first.data()['hostId'] == user.uid;
+                                    final docDirect = await FirebaseFirestore.instance.collection('meetings').doc(code).get();
+                                    if (docDirect.exists && docDirect.data() != null) {
+                                      final data = docDirect.data()!;
+                                      isHost = data['hostId'] == user.uid;
+                                      meetingTitle = data['title'] as String?;
+                                    } else {
+                                      final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: code).limit(1).get();
+                                      if (query.docs.isNotEmpty) {
+                                        final data = query.docs.first.data();
+                                        isHost = data['hostId'] == user.uid;
+                                        meetingTitle = data['title'] as String?;
+                                      }
                                     }
                                   } catch (e) {
                                     debugPrint('Failed to check host status: $e');
@@ -835,6 +879,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   MaterialPageRoute(
                                     builder: (context) => VideoRoomScreen(
                                       roomName: code,
+                                      meetingTitle: meetingTitle,
                                       participantName: displayName,
                                       initialAudioOn: prefs['audio'] ?? true,
                                       initialVideoOn: prefs['video'] ?? true,
@@ -1049,15 +1094,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   onPressed: () async {
                                     final prefs = await showPreJoinDialog(context);
                                     if (prefs == null || !mounted) return;
+
+                                    final user = FirebaseAuth.instance.currentUser;
+                                    bool isHost = false;
+                                    String? meetingTitle;
+                                    if (user != null) {
+                                      try {
+                                        final docDirect = await FirebaseFirestore.instance.collection('meetings').doc(activeRoom).get();
+                                        if (docDirect.exists && docDirect.data() != null) {
+                                          final data = docDirect.data()!;
+                                          isHost = data['hostId'] == user.uid;
+                                          meetingTitle = data['title'] as String?;
+                                        } else {
+                                          final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: activeRoom).limit(1).get();
+                                          if (query.docs.isNotEmpty) {
+                                            final data = query.docs.first.data();
+                                            isHost = data['hostId'] == user.uid;
+                                            meetingTitle = data['title'] as String?;
+                                          }
+                                        }
+                                      } catch (e) {
+                                        debugPrint('Failed to check host status for active room: $e');
+                                      }
+                                    }
+
+                                    if (!mounted) return;
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => VideoRoomScreen(
                                           roomName: activeRoom,
-                                          participantName: FirebaseAuth.instance.currentUser?.displayName ?? 'User',
+                                          meetingTitle: meetingTitle,
+                                          participantName: user?.displayName ?? 'User',
                                           initialAudioOn: prefs['audio'] ?? true,
                                           initialVideoOn: prefs['video'] ?? true,
-                                          isHost: false, // Assume guest for rejoin
+                                          isHost: isHost,
                                         ),
                                       ),
                                     );
@@ -1386,6 +1457,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                         MaterialPageRoute(
                                                           builder: (context) => VideoRoomScreen(
                                                             roomName: meeting.roomId,
+                                                            meetingTitle: meeting.title,
                                                             participantName: FirebaseAuth.instance.currentUser?.displayName ?? 'Premium User',
                                                             initialAudioOn: prefs['audio'] ?? true,
                                                             initialVideoOn: prefs['video'] ?? true,

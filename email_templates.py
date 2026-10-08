@@ -266,13 +266,55 @@ def render_post_meeting_recap_email(
     room_id: str,
     title: str = "",
     notes_summary: str = "",
-    recording_url: str = ""
+    recording_url: str = "",
+    executive_summary: str = "",
+    key_points: list = None,
+    action_items: list = None,
 ) -> str:
-    """Renders a branded post-meeting / post-service recap digest with replay & notes access."""
+    """Renders a branded post-meeting / post-service recap digest with AI summary, takeaways, replay & notes access."""
     
     display_title = title if title else f"Meeting: {room_id}"
     dashboard_url = APP_BASE_URL
     
+    # Render Executive Summary block
+    exec_summary_text = executive_summary or notes_summary or 'Session attendance, discussion takeaways, and resources have been saved to your dashboard.'
+    
+    # Render Key Points block
+    key_points_html = ""
+    if key_points and len(key_points) > 0:
+        points_items = "".join([
+            f'<li style="margin-bottom: 8px; color: #C9D1D9; font-size: 13.5px; line-height: 1.5;">{str(p).strip()}</li>'
+            for p in key_points if str(p).strip()
+        ])
+        key_points_html = f"""
+        <div style="background: rgba(0, 229, 255, 0.04); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;">
+            <h4 style="color: #00E5FF; margin: 0 0 10px 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;">
+                💡 Key Discussion Takeaways
+            </h4>
+            <ul style="margin: 0; padding-left: 20px;">
+                {points_items}
+            </ul>
+        </div>
+        """
+
+    # Render Action Items block
+    action_items_html = ""
+    if action_items and len(action_items) > 0:
+        actions_list = "".join([
+            f'<div style="display: flex; align-items: flex-start; margin-bottom: 8px; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 8px; border-left: 3px solid #00FFA3;"><span style="color: #00FFA3; font-weight: bold; margin-right: 8px;">✓</span><span style="color: #E6EDF3; font-size: 13px; line-height: 1.4;">{str(a).strip()}</span></div>'
+            for a in action_items if str(a).strip()
+        ])
+        action_items_html = f"""
+        <div style="background: rgba(0, 255, 163, 0.04); border: 1px solid rgba(0, 255, 163, 0.2); border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;">
+            <h4 style="color: #00FFA3; margin: 0 0 10px 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;">
+                🎯 Action Items &amp; Next Steps
+            </h4>
+            <div>
+                {actions_list}
+            </div>
+        </div>
+        """
+
     recording_block = ""
     if recording_url:
         recording_block = f"""
@@ -290,7 +332,7 @@ def render_post_meeting_recap_email(
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Thank you for joining {display_title}!</title>
+    <title>AI Meeting Summary &amp; Recap: {display_title}</title>
     <style type="text/css">
         {get_base_styles()}
     </style>
@@ -299,32 +341,35 @@ def render_post_meeting_recap_email(
     <center style="width: 100%; background-color: #070B19; padding: 32px 0;">
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" class="email-container" style="max-width: 600px; margin: 0 auto; background-color: #0E1326; border-radius: 18px; border: 1px solid rgba(155, 85, 255, 0.35); overflow: hidden; box-shadow: 0 12px 36px rgba(0,0,0,0.65);">
             
-            {get_header_html(badge_text="📝 MEETING CONCLUDED &bull; RECAP", badge_color="#B524D3")}
+            {get_header_html(badge_text="✨ AI MEETING SUMMARY &bull; RECAP", badge_color="#00E5FF")}
 
             <!-- TITLE & RECAP -->
             <tr>
                 <td class="content-padding" style="padding: 16px 40px 28px 40px; color: #C9D1D9; font-size: 15px; line-height: 1.65;">
-                    <h2 style="color: #FFFFFF; font-size: 24px; font-weight: 800; margin: 0 0 12px 0; text-align: center; letter-spacing: -0.5px;">
+                    <h2 style="color: #FFFFFF; font-size: 24px; font-weight: 800; margin: 0 0 8px 0; text-align: center; letter-spacing: -0.5px;">
                         {display_title}
                     </h2>
-                    <p style="text-align: center; color: #8B949E; margin-bottom: 24px;">
-                        Thank you for attending today on La-Vie. Your summary, shared resources, and notes are ready below.
+                    <p style="text-align: center; color: #8B949E; margin-bottom: 24px; font-size: 13.5px;">
+                        Thank you for attending today on La-Vie. Your automated AI meeting transcript, key takeaways, and action items are compiled below.
                     </p>
 
-                    <!-- NOTES BOX -->
-                    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-left: 4px solid #00E5FF; border-radius: 10px; padding: 20px; margin-bottom: 24px;">
+                    <!-- EXECUTIVE SUMMARY BOX -->
+                    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-left: 4px solid #00E5FF; border-radius: 10px; padding: 20px; margin-bottom: 20px;">
                         <h4 style="color: #00E5FF; margin: 0 0 8px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">
-                            Summary &amp; Shared Resources
+                            📝 Executive Summary
                         </h4>
-                        <p style="color: #C9D1D9; font-size: 14px; line-height: 1.55; margin: 0;">
-                            {notes_summary if notes_summary else 'Session attendance, whiteboard notes, and resources have been saved to your dashboard.'}
+                        <p style="color: #C9D1D9; font-size: 14px; line-height: 1.6; margin: 0;">
+                            {exec_summary_text}
                         </p>
                     </div>
+
+                    {key_points_html}
+                    {action_items_html}
 
                     <table border="0" cellpadding="0" cellspacing="0" width="100%">
                         {recording_block}
                         <tr>
-                            <td align="center">
+                            <td align="center" style="padding-top: 10px;">
                                 <a href="{dashboard_url}" target="_blank" class="btn-action" style="background: linear-gradient(135deg, #00E5FF 0%, #5C00FF 100%); color: #070B19; display: inline-block; font-size: 15px; font-weight: 800; line-height: 48px; text-align: center; text-decoration: none; width: 240px; border-radius: 24px; box-shadow: 0 6px 20px rgba(0, 229, 255, 0.45); text-transform: uppercase; letter-spacing: 0.5px;">
                                     Open Dashboard &rarr;
                                 </a>
@@ -334,7 +379,7 @@ def render_post_meeting_recap_email(
                 </td>
             </tr>
 
-            {get_footer_html(sender_name="La-Vie Community Team")}
+            {get_footer_html(sender_name="La-Vie AI Meeting Assistant")}
 
         </table>
     </center>

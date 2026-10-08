@@ -16,3 +16,23 @@ firebase-adminsdk.json
 .env
 .env.*
 *.pem
+
+# Android & Flutter build artifacts
+*.apk
+*.aab
+la_vie_flutter/build/
+la_vie_flutter/.dart_tool/
+la_vie_flutter/.flutter-plugins
+la_vie_flutter/.flutter-plugins-dependencies
+
+# Generated Reports & PDFs
+*.docx
+*.pdf
+
+# Scratch & temporary logs
+sample_inspect.txt
+scratch_report.txt
+implementation_planlaa
+
+# Sub-projects (tracked in separate repository)
+la_vie_messenger/

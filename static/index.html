@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>La-Vie Conference App - WebRTC</title>
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -51,28 +51,34 @@
                     <h1 class="hero-title">Professional Video Meetings &amp; Broadcasts.<br><span class="highlight">Free for Everyone.</span></h1>
                     <p class="hero-subtitle">Connect teams, run virtual conferences, and stream live vMix studio productions from anywhere with low-latency WebRTC technology.</p>
                     
-                    <div class="hero-actions">
-                        <div class="new-meeting-wrapper">
-                            <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
-                                <span class="material-symbols-outlined">video_call</span>
-                                New meeting
-                            </button>
-                            <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
-                                <button id="instantMeetingBtn" class="dropdown-item">
-                                    <span class="material-symbols-outlined">add</span> 
-                                    Start an instant meeting
+                    <div class="hero-actions hero-actions-v2">
+                        <!-- Tier 1: Primary CTA -->
+                        <div class="action-tier--primary">
+                            <div class="new-meeting-wrapper">
+                                <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
+                                    <span class="material-symbols-outlined">video_call</span>
+                                    New meeting
                                 </button>
-                                <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
-                                    <span class="material-symbols-outlined">calendar_today</span> 
-                                    Schedule in database
-                                </button>
+                                <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
+                                    <button id="instantMeetingBtn" class="dropdown-item">
+                                        <span class="material-symbols-outlined">add</span> 
+                                        Start an instant meeting
+                                    </button>
+                                    <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
+                                        <span class="material-symbols-outlined">calendar_today</span> 
+                                        Schedule in database
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                        
-                        <div class="input-group meet-input-group glass-input">
-                            <span class="material-symbols-outlined input-icon">keyboard</span>
-                            <input type="text" id="roomId" placeholder="Enter a code or link">
-                            <button id="joinBtn" class="text-btn" disabled>Join</button>
+
+                        <!-- Tier 2: Secondary — join existing meeting -->
+                        <div class="action-tier--secondary">
+                            <div class="input-group meet-input-group glass-input">
+                                <span class="material-symbols-outlined input-icon">keyboard</span>
+                                <input type="text" id="roomId" placeholder="Enter a code or link">
+                                <button id="joinBtn" class="text-btn" disabled>Join</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -250,7 +256,90 @@
                 <h2>What's your name?</h2>
                 <p class="modal-desc">Others in the call will see this name.</p>
                 <input type="text" id="userName" class="modal-input" placeholder="Your Name" value="Anonymous">
-                <button id="preJoinSubmitBtn" class="primary-btn full-width">Join Call</button>
+                <button id="preJoinSubmitBtn" class="primary-btn full-width">Continue</button>
+            </div>
+        </div>
+
+        <!-- Active Meeting Conflict Modal -->
+        <div id="activeMeetingConflictModal" class="modal-overlay" style="display: none; z-index: 99999;">
+            <div class="modal-content" style="text-align: center; max-width: 440px;">
+                <button class="close-modal" id="closeConflictModalBtn">&times;</button>
+                <div style="width: 54px; height: 54px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); color: #ef4444; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+                    <span class="material-symbols-outlined" style="font-size: 28px;">swap_calls</span>
+                </div>
+                <h2 style="font-size: 1.3rem; margin-bottom: 8px;">Switch Meetings?</h2>
+                <p class="modal-desc" style="margin-bottom: 20px; line-height: 1.5; color: var(--text-muted);">
+                    You are already connected to <strong id="conflictCurrentRoomId" style="color: #00e5ff; font-family: monospace;">room</strong>.<br>
+                    Leaving will disconnect your current session to join <strong id="conflictTargetRoomId" style="color: #fff; font-family: monospace;">new-room</strong>.
+                </p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button id="cancelConflictBtn" class="nav-btn" style="flex: 1; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px; padding: 12px;">Stay in Current</button>
+                    <button id="leaveAndJoinBtn" class="primary-btn" style="flex: 1; border-radius: 8px; background: #ef4444; padding: 12px;">Leave &amp; Join</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pre-Call Green Room Overlay -->
+        <div id="greenRoomOverlay" class="modal-overlay greenroom-overlay" style="display: none; z-index: 99998;">
+            <div class="glass-card greenroom-card">
+                <button class="close-modal" id="greenRoomCloseBtn">&times;</button>
+                <div class="greenroom-header">
+                    <div class="greenroom-header-left">
+                        <h2 id="greenRoomTitle">Ready to join?</h2>
+                        <p class="greenroom-room-tag">Room: <span id="greenRoomRoomId">la-vie</span></p>
+                    </div>
+                    <div class="greenroom-user-badge">
+                        <span class="material-symbols-outlined" style="font-size: 18px; color: #00e5ff;">account_circle</span>
+                        <span id="greenRoomUserName">You</span>
+                    </div>
+                </div>
+
+                <div class="greenroom-body">
+                    <!-- Video Preview Container -->
+                    <div class="greenroom-video-container">
+                        <video id="greenRoomVideo" autoplay playsinline muted></video>
+                        <div id="greenRoomVideoPlaceholder" class="greenroom-video-placeholder" style="display: none;">
+                            <span class="material-symbols-outlined placeholder-icon">videocam_off</span>
+                            <span>Camera is turned off</span>
+                        </div>
+                        
+                        <!-- Floating controls over preview -->
+                        <div class="greenroom-preview-controls">
+                            <button id="greenRoomToggleMic" class="greenroom-ctrl-btn" title="Toggle Microphone">
+                                <span class="material-symbols-outlined">mic</span>
+                            </button>
+                            <button id="greenRoomToggleCam" class="greenroom-ctrl-btn" title="Toggle Camera">
+                                <span class="material-symbols-outlined">videocam</span>
+                            </button>
+                        </div>
+
+                        <!-- Audio Level Meter -->
+                        <div class="greenroom-meter-wrap" title="Microphone Level">
+                            <span class="material-symbols-outlined meter-icon">volume_up</span>
+                            <canvas id="greenRoomAudioMeter" width="120" height="14"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Device Selectors -->
+                    <div class="greenroom-device-controls">
+                        <div class="greenroom-select-group">
+                            <label><span class="material-symbols-outlined">videocam</span> Camera</label>
+                            <select id="greenRoomCamSelect" class="modal-input greenroom-select"></select>
+                        </div>
+                        <div class="greenroom-select-group">
+                            <label><span class="material-symbols-outlined">mic</span> Microphone</label>
+                            <select id="greenRoomMicSelect" class="modal-input greenroom-select"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="greenroom-footer">
+                    <button id="greenRoomCancelBtn" class="nav-btn greenroom-cancel-btn">Cancel</button>
+                    <button id="greenRoomJoinBtn" class="primary-btn greenroom-join-btn">
+                        <span class="material-symbols-outlined" id="greenRoomJoinBtnIcon">login</span>
+                        <span id="greenRoomJoinBtnText">Join Now</span>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -400,6 +489,14 @@
                             <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Optimizes stream bandwidth for low-speed connections</div>
                         </div>
                         <button id="settingsDataSaverToggleBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Toggle</button>
+                    </div>
+
+                    <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px;">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 600; color: #fff;">Live Captions (Web Speech)</div>
+                            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.5);">Real-time speech-to-text subtitles broadcast to call</div>
+                        </div>
+                        <button id="settingsCaptionsToggleBtn" class="secondary-btn" style="padding: 6px 14px; font-size: 0.8rem;">Toggle</button>
                     </div>
 
                     <div class="settings-toggle-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
@@ -667,6 +764,7 @@
                         <video id="localVideo" autoplay muted playsinline></video>
                         <div class="avatar-placeholder" id="localAvatar">You</div>
                         <span class="label" id="localLabel">You</span>
+                        <div class="signal-bars" data-quality="excellent" title="Connection: Excellent"><span></span><span></span><span></span></div>
                         <button class="fullscreen-overlay-btn" id="localFullscreenBtn" title="Full Screen">
                             <span class="material-symbols-outlined">fullscreen</span>
                         </button>
@@ -679,7 +777,144 @@
                     </div>
                 </div>
                 
-                <div class="media-controls" id="mediaControls" style="display: none;">
+                <!-- Live Captions Subtitle Overlay -->
+                <div class="live-captions-container" id="liveCaptionsContainer" style="display: none;"></div>
+                
+                <!-- MORE DRAWER (Categorised slide-up panel, Tier 2 controls) -->
+                <div class="more-drawer" id="moreDrawer" role="dialog" aria-label="More options">
+
+                    <!-- GROUP: Interact -->
+                    <div class="drawer-group">
+                        <p class="drawer-group-title">Interact</p>
+                        <div class="react-wrapper" style="position: relative; width: 100%;">
+                            <button id="toggleReactBtn" class="drawer-item" title="React">
+                                <span class="material-symbols-outlined">add_reaction</span>
+                                React
+                            </button>
+                            <div class="emoji-popover" id="emojiPopover" style="display: none; position: absolute; bottom: calc(100% + 8px); left: 14px; z-index: 99999;">
+                                <button class="emoji-btn">👍</button>
+                                <button class="emoji-btn">❤️</button>
+                                <button class="emoji-btn">😂</button>
+                                <button class="emoji-btn">😮</button>
+                                <button class="emoji-btn">👏</button>
+                                <button class="emoji-btn">🎉</button>
+                            </div>
+                        </div>
+                        <button id="toggleHandBtn" class="drawer-item" title="Raise Hand">
+                            <span class="material-symbols-outlined">front_hand</span>
+                            Raise Hand
+                        </button>
+                        <button id="drawerChatBtn" class="drawer-item" title="Chat">
+                            <span class="material-symbols-outlined">chat</span>
+                            Chat
+                            <span class="drawer-item-badge" id="drawerChatBadge"></span>
+                        </button>
+                        <button id="drawerPeopleBtn" class="drawer-item" title="People">
+                            <span class="material-symbols-outlined">group</span>
+                            People
+                        </button>
+                        <button id="drawerWhiteboardBtn" class="drawer-item" title="Whiteboard">
+                            <span class="material-symbols-outlined">draw</span>
+                            Whiteboard
+                        </button>
+                        <button id="drawerPollsBtn" class="drawer-item" title="Polls">
+                            <span class="material-symbols-outlined">bar_chart</span>
+                            Polls
+                        </button>
+                        <button id="drawerQaBtn" class="drawer-item" title="Q&amp;A">
+                            <span class="material-symbols-outlined">help_center</span>
+                            Q&amp;A
+                        </button>
+                    </div>
+
+                    <div class="drawer-divider"></div>
+
+                    <!-- GROUP: Media -->
+                    <div class="drawer-group">
+                        <p class="drawer-group-title">Media</p>
+                        <button id="flipCameraBtn" class="drawer-item device-accordion-btn" style="display: none; justify-content: space-between;">
+                            <span style="display:flex;align-items:center;gap:14px;">
+                                <span class="material-symbols-outlined">cameraswitch</span>
+                                <span id="flipCameraBtnText">Camera</span>
+                            </span>
+                            <span class="material-symbols-outlined accordion-arrow" style="font-size:1.1rem;transition:transform 0.2s;">expand_more</span>
+                        </button>
+                        <div id="cameraListContainer" class="camera-list-sub-menu" style="display: none;"></div>
+
+                        <button id="audioDevicesBtn" class="drawer-item device-accordion-btn" style="display: none; justify-content: space-between;">
+                            <span style="display:flex;align-items:center;gap:14px;">
+                                <span class="material-symbols-outlined">mic</span>
+                                <span id="audioDevicesBtnText">Microphone</span>
+                            </span>
+                            <span class="material-symbols-outlined accordion-arrow" style="font-size:1.1rem;transition:transform 0.2s;">expand_more</span>
+                        </button>
+                        <div id="audioListContainer" class="camera-list-sub-menu" style="display: none;"></div>
+
+                        <button id="speakerDevicesBtn" class="drawer-item device-accordion-btn" style="display: none; justify-content: space-between;">
+                            <span style="display:flex;align-items:center;gap:14px;">
+                                <span class="material-symbols-outlined">volume_up</span>
+                                <span id="speakerDevicesBtnText">Speaker</span>
+                            </span>
+                            <span class="material-symbols-outlined accordion-arrow" style="font-size:1.1rem;transition:transform 0.2s;">expand_more</span>
+                        </button>
+                        <div id="speakerListContainer" class="camera-list-sub-menu" style="display: none;"></div>
+
+                        <button id="toggleEffectsBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">auto_awesome</span>
+                            Effects &amp; Background
+                        </button>
+                        <button id="toggleNoiseBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">noise_control_off</span>
+                            AI Noise Cancellation
+                        </button>
+                    </div>
+
+                    <div class="drawer-divider"></div>
+
+                    <!-- GROUP: Meeting -->
+                    <div class="drawer-group">
+                        <p class="drawer-group-title">Meeting</p>
+                        <button id="toggleRecordBtn" class="drawer-item" style="display: none;">
+                            <span class="material-symbols-outlined">radio_button_checked</span>
+                            Record
+                        </button>
+                        <button id="toggleVmixBtn" class="drawer-item" style="display: none;">
+                            <span class="material-symbols-outlined">live_tv</span>
+                            vMix / Live Ingest
+                        </button>
+                        <button id="toggleMultiStreamBtn" class="drawer-item" style="display: none;">
+                            <span class="material-symbols-outlined" style="color:#FF0055;">podcasts</span>
+                            Multi-Stream (YouTube / FB)
+                        </button>
+                        <button id="shareLinkBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">link</span>
+                            Copy Meeting Link
+                        </button>
+                        <button id="toggleAppFullscreenBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">fullscreen</span>
+                            Fullscreen Mode
+                        </button>
+                        <button id="toggleDataSaverBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">data_saver_on</span>
+                            Data Saver
+                        </button>
+                        <button id="toggleCaptionsDrawerBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">closed_caption</span>
+                            Live Captions (CC)
+                        </button>
+                        <button id="toggleSettingsMenuBtn" class="drawer-item">
+                            <span class="material-symbols-outlined">settings</span>
+                            Settings
+                        </button>
+                        <button id="muteAllBtn" class="drawer-item danger-item" style="display: none;">
+                            <span class="material-symbols-outlined">mic_off</span>
+                            Mute All
+                        </button>
+                    </div>
+                </div>
+
+                <!-- TIER-1 CONTROL BAR (5 buttons only: Mic, Video, Screen, More, Leave) -->
+                <div class="media-controls media-controls-v2" id="mediaControls" style="display: none;">
                     <button id="toggleMicBtn" class="control-btn active" title="Mute/Unmute">
                         <span class="material-symbols-outlined">mic</span>
                     </button>
@@ -689,88 +924,34 @@
                     <button id="toggleScreenBtn" class="control-btn" title="Share Screen">
                         <span class="material-symbols-outlined">present_to_all</span>
                     </button>
-                    
-                    <div class="react-wrapper" style="position: relative;">
-                        <button id="toggleReactBtn" class="control-btn" title="React">
-                            <span class="material-symbols-outlined">add_reaction</span>
-                        </button>
-                        <div class="emoji-popover" id="emojiPopover" style="display: none; position: absolute; bottom: calc(100% + 14px); top: auto; left: 50%; transform: translateX(-50%); z-index: 99999;">
-                            <button class="emoji-btn">👍</button>
-                            <button class="emoji-btn">❤️</button>
-                            <button class="emoji-btn">😂</button>
-                            <button class="emoji-btn">😮</button>
-                            <button class="emoji-btn">👏</button>
-                            <button class="emoji-btn">🎉</button>
-                        </div>
-                    </div>
-                    
-                    <button id="toggleHandBtn" class="control-btn" title="Raise Hand">
-                        <span class="material-symbols-outlined">front_hand</span>
+
+                    <!-- Live Captions Quick-Toggle Button -->
+                    <button id="toggleCaptionsBtn" class="control-btn" title="Live Captions (CC)">
+                        <span class="material-symbols-outlined">closed_caption</span>
                     </button>
 
+                    <!-- Audio Output Quick-Switch Button -->
                     <div class="more-options-wrapper" style="position: relative;">
-                        <button id="toggleMoreBtn" class="control-btn" title="More Options">
-                            <span class="material-symbols-outlined">more_horiz</span>
+                        <button id="audioOutputBtn" class="control-btn" title="Switch Audio Output" style="display: none;">
+                            <span class="material-symbols-outlined" id="audioOutputBtnIcon">volume_up</span>
                         </button>
-                        <div class="dropdown-menu glassmorphic" id="moreOptionsMenu" style="display: none; position: absolute; bottom: calc(100% + 14px); top: auto; right: 0; left: auto; transform: none; z-index: 99999; margin: 0;">
-                            <button id="toggleSettingsMenuBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">settings</span> Settings
-                            </button>
-                            <button id="toggleAppFullscreenBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">fullscreen</span> Fullscreen Mode
-                            </button>
-                            <button id="toggleDataSaverBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">data_saver_on</span> Data Saver
-                            </button>
-                            <button id="toggleRecordBtn" class="dropdown-item" style="display: none;">
-                                <span class="material-symbols-outlined">radio_button_checked</span> Record
-                            </button>
-                            <button id="toggleVmixBtn" class="dropdown-item" style="display: none;">
-                                <span class="material-symbols-outlined">live_tv</span> vMix / Live Ingest
-                            </button>
-                            <button id="toggleMultiStreamBtn" class="dropdown-item" style="display: none;">
-                                <span class="material-symbols-outlined" style="color: #FF0055;">podcasts</span> Multi-Stream (YouTube / FB)
-                            </button>
-                            <button id="toggleEffectsBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">auto_awesome</span> Effects
-                            </button>
-                            <button id="toggleNoiseBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">noise_control_off</span> AI Noise Cancellation
-                            </button>
-                            <button id="shareLinkBtn" class="dropdown-item">
-                                <span class="material-symbols-outlined">link</span> Copy Meeting Link
-                            </button>
-                            <button id="flipCameraBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span class="material-symbols-outlined">cameraswitch</span>
-                                    <span id="flipCameraBtnText">Camera</span>
-                                </div>
-                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
-                            </button>
-                            <div id="cameraListContainer" class="camera-list-sub-menu" style="display: none;"></div>
-
-                            <button id="audioDevicesBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span class="material-symbols-outlined">mic</span>
-                                    <span id="audioDevicesBtnText">Microphone</span>
-                                </div>
-                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
-                            </button>
-                            <div id="audioListContainer" class="camera-list-sub-menu" style="display: none;"></div>
-
-                            <button id="speakerDevicesBtn" class="dropdown-item device-accordion-btn" style="display: none; justify-content: space-between; align-items: center;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span class="material-symbols-outlined">volume_up</span>
-                                    <span id="speakerDevicesBtnText">Speaker</span>
-                                </div>
-                                <span class="material-symbols-outlined accordion-arrow" style="font-size: 1.2rem; transition: transform 0.2s ease;">expand_more</span>
-                            </button>
-                            <div id="speakerListContainer" class="camera-list-sub-menu" style="display: none;"></div>
-                            <button id="muteAllBtn" class="dropdown-item" style="display: none; color: #ef4444;">
-                                <span class="material-symbols-outlined">mic_off</span> Mute All
-                            </button>
+                        <!-- Floating audio output picker -->
+                        <div id="audioOutputPicker" class="audio-output-picker" style="display: none;">
+                            <div class="aop-header">
+                                <span class="material-symbols-outlined" style="font-size:1rem;color:#00E5FF;">settings_input_component</span>
+                                <span>Audio Output</span>
+                                <span id="aopDeviceCount" style="margin-left:auto;font-size:0.72rem;opacity:0.45;"></span>
+                            </div>
+                            <div id="aopRouteList" class="aop-route-list"></div>
                         </div>
                     </div>
+
+                    <div class="more-options-wrapper" style="position: relative;">
+                        <button id="toggleMoreBtn" class="control-btn" title="More options">
+                            <span class="material-symbols-outlined">more_horiz</span>
+                        </button>
+                    </div>
+
 
                     <button id="leaveCallBtn" class="control-btn leave-btn" title="Leave Call">
                         <span class="material-symbols-outlined">call_end</span>
@@ -913,12 +1094,105 @@
                 </form>
             </div>
         </div>
-    
+        <!-- SHEET BACKDROP (closes mobile sheet on tap) -->
+        <div class="sheet-backdrop" id="sheetBackdrop"></div>
+
+        <!-- MOBILE PANEL SHEET (mobile navigation + more options) -->
+        <div class="mobile-panel-sheet" id="mobilePanelSheet" role="dialog" aria-label="Menu">
+            <div class="mobile-sheet-handle"></div>
+
+            <!-- Nav shortcuts -->
+            <div class="mobile-sheet-nav">
+                <button class="mobile-sheet-nav-btn" id="mobileSheetPeopleBtn" title="People">
+                    <span class="material-symbols-outlined">group</span>
+                    People
+                </button>
+                <button class="mobile-sheet-nav-btn" id="mobileSheetChatBtn" title="Chat">
+                    <span class="material-symbols-outlined">chat</span>
+                    Chat
+                    <span class="mobile-sheet-badge" id="mobileSheetChatBadge"></span>
+                </button>
+                <button class="mobile-sheet-nav-btn" id="mobileSheetWhiteboardBtn" title="Whiteboard">
+                    <span class="material-symbols-outlined">draw</span>
+                    Board
+                </button>
+                <button class="mobile-sheet-nav-btn" id="mobileSheetPollsBtn" title="Polls">
+                    <span class="material-symbols-outlined">bar_chart</span>
+                    Polls
+                </button>
+                <button class="mobile-sheet-nav-btn" id="mobileSheetQaBtn" title="Q&amp;A">
+                    <span class="material-symbols-outlined">help_center</span>
+                    Q&amp;A
+                </button>
+            </div>
+
+            <!-- Interact group -->
+            <div class="drawer-group">
+                <p class="drawer-group-title">Interact</p>
+                <div class="react-wrapper" style="position: relative; width: 100%;">
+                    <button id="mobileSheetReactBtn" class="drawer-item" title="React">
+                        <span class="material-symbols-outlined">add_reaction</span>
+                        React
+                    </button>
+                    <div class="emoji-popover" id="mobileEmojiPopover" style="display: none; position: absolute; bottom: calc(100% + 8px); left: 14px; z-index: 99999;">
+                        <button class="emoji-btn">👍</button>
+                        <button class="emoji-btn">❤️</button>
+                        <button class="emoji-btn">😂</button>
+                        <button class="emoji-btn">😮</button>
+                        <button class="emoji-btn">👏</button>
+                        <button class="emoji-btn">🎉</button>
+                    </div>
+                </div>
+                <button id="mobileSheetHandBtn" class="drawer-item" title="Raise Hand">
+                    <span class="material-symbols-outlined">front_hand</span>
+                    Raise Hand
+                </button>
+            </div>
+
+            <div class="drawer-divider"></div>
+
+            <!-- Media group -->
+            <div class="drawer-group">
+                <p class="drawer-group-title">Media</p>
+                <button id="mobileSheetEffectsBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">auto_awesome</span>
+                    Effects &amp; Background
+                </button>
+                <button id="mobileSheetNoiseBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">noise_control_off</span>
+                    AI Noise Cancellation
+                </button>
+            </div>
+
+            <div class="drawer-divider"></div>
+
+            <!-- Meeting group -->
+            <div class="drawer-group">
+                <p class="drawer-group-title">Meeting</p>
+                <button id="mobileSheetShareBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">link</span>
+                    Copy Meeting Link
+                </button>
+                <button id="mobileSheetSettingsBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">settings</span>
+                    Settings
+                </button>
+                <button id="mobileSheetDataSaverBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">data_saver_on</span>
+                    Data Saver
+                </button>
+                <button id="mobileSheetCaptionsBtn" class="drawer-item">
+                    <span class="material-symbols-outlined">closed_caption</span>
+                    Live Captions (CC)
+                </button>
+            </div>
+        </div>
+
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script type="module" src="/static/firebase-config.js"></script>
     <script type="module" src="/static/auth.js"></script>
     <script type="module" src="/static/dashboard.js?v=2"></script>
-    <script type="module" src="/static/app.js?v=2"></script>
+    <script type="module" src="/static/app.js?v=6"></script>
 </body>
 </html>

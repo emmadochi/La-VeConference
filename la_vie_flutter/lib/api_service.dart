@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -19,54 +20,101 @@ class AlreadyInMeetingException implements Exception {
 
 class ApiService {
   static const String baseUrl = 'https://la-vie.lifechangerstouch.org';
+  static const Duration requestTimeout = Duration(seconds: 15);
 
-  static Future<String> getToken(String roomName, String participantName, {bool force = false}) async {
+  static Future<Map<String, dynamic>> getTokenDetails(String roomName, String participantName, {bool force = false}) async {
     // Generate a unique peer ID or use Firebase UID
     final user = FirebaseAuth.instance.currentUser;
     final peerId = user?.uid ?? 'peer_${DateTime.now().millisecondsSinceEpoch}';
     
     final authToken = await user?.getIdToken();
-    
     final uri = Uri.parse('$baseUrl/token/$roomName/$peerId?name=${Uri.encodeComponent(participantName)}${force ? "&force=true" : ""}');
-    final response = await http.get(
-      uri,
-      headers: {
-        if (authToken != null) 'Authorization': 'Bearer $authToken',
-      },
-    );
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['token'] as String;
-    } else if (response.statusCode == 403 || response.statusCode == 409) {
+    int attempts = 0;
+    const maxAttempts = 3;
+    dynamic lastError;
+
+    while (attempts < maxAttempts) {
+      attempts++;
       try {
-        final data = jsonDecode(response.body);
-        final detail = data['detail'];
-        if (detail is Map) {
-          throw AlreadyInMeetingException(
-            activeRoom: detail['active_room']?.toString() ?? '',
-            targetRoom: detail['target_room']?.toString() ?? roomName,
-            message: detail['message']?.toString() ?? 'You are already in another meeting.',
-          );
-        } else if (detail is String) {
-          throw AlreadyInMeetingException(
-            activeRoom: '',
-            targetRoom: roomName,
-            message: detail,
-          );
+        final client = http.Client();
+        try {
+          final response = await client.get(
+            uri,
+            headers: {
+              if (authToken != null) 'Authorization': 'Bearer $authToken',
+            },
+          ).timeout(requestTimeout);
+
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            return data;
+          } else if (response.statusCode == 403 || response.statusCode == 409) {
+            try {
+              final data = jsonDecode(response.body);
+              final detail = data['detail'];
+              if (detail is Map) {
+                if (detail['error'] == 'room_locked') {
+                  throw Exception(detail['message']?.toString() ?? 'This meeting has been locked by the host.');
+                }
+                throw AlreadyInMeetingException(
+                  activeRoom: detail['active_room']?.toString() ?? '',
+                  targetRoom: detail['target_room']?.toString() ?? roomName,
+                  message: detail['message']?.toString() ?? 'You are already in another meeting.',
+                );
+              } else if (detail is String) {
+                if (detail.toLowerCase().contains('locked')) {
+                  throw Exception(detail);
+                }
+                throw AlreadyInMeetingException(
+                  activeRoom: '',
+                  targetRoom: roomName,
+                  message: detail,
+                );
+              }
+            } catch (e) {
+              if (e is AlreadyInMeetingException) rethrow;
+              if (e.toString().contains('locked')) rethrow;
+            }
+            throw Exception('Access denied: Unable to join meeting.');
+          } else if (response.statusCode >= 500) {
+            throw Exception('The meeting server is temporarily unavailable. Please try again in a few moments.');
+          } else if (response.statusCode == 404) {
+            throw Exception('Meeting room not found. Please verify your meeting code.');
+          } else {
+            throw Exception('Unable to join meeting. Please check your connection and try again.');
+          }
+        } finally {
+          client.close();
         }
       } catch (e) {
-        if (e is AlreadyInMeetingException) rethrow;
+        lastError = e;
+        if (e is AlreadyInMeetingException || e.toString().contains('locked')) {
+          rethrow;
+        }
+        if (attempts < maxAttempts) {
+          // Exponential backoff before retrying
+          await Future.delayed(Duration(milliseconds: 600 * attempts));
+        }
       }
-      throw Exception('You are already in another meeting.');
-    } else {
-      throw Exception('Failed to load token: ${response.body}');
     }
+
+    // If all attempts failed
+    final errStr = lastError?.toString() ?? 'Unknown error';
+    if (errStr.contains('Connection closed') || errStr.contains('SocketException') || errStr.contains('TimeoutException') || errStr.contains('Failed host lookup')) {
+      throw Exception('Unable to reach the conference server. Please check your internet connection and try again.');
+    }
+    throw Exception(errStr.replaceFirst('Exception: ', ''));
+  }
+
+  static Future<String> getToken(String roomName, String participantName, {bool force = false}) async {
+    final data = await getTokenDetails(roomName, participantName, force: force);
+    return data['token'] as String;
   }
 
   static Future<String> getLiveKitUrl() async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/tunnel-config'));
+      final response = await http.get(Uri.parse('$baseUrl/tunnel-config')).timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['livekit_url'] as String;
@@ -74,7 +122,7 @@ class ApiService {
     } catch (e) {
       // ignore
     }
-    return 'wss://la-vie-nffo0a6v.livekit.cloud';
+    return 'wss://lavie-live-bmlbvgd2.livekit.cloud';
   }
 
   static Future<String?> startRecording(String roomName) async {
@@ -87,7 +135,7 @@ class ApiService {
           if (authToken != null) 'Authorization': 'Bearer $authToken',
         },
         body: jsonEncode({'room_id': roomName}),
-      );
+      ).timeout(requestTimeout);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['egress_id'] as String?;
@@ -95,7 +143,8 @@ class ApiService {
         throw Exception('${response.statusCode}: ${response.body}');
       }
     } catch (e) {
-      throw Exception('Failed to connect: $e');
+      // Return null or throw for client recording fallback
+      return null;
     }
   }
 
@@ -109,7 +158,7 @@ class ApiService {
           if (authToken != null) 'Authorization': 'Bearer $authToken',
         },
         body: jsonEncode({'egress_id': egressId}),
-      );
+      ).timeout(requestTimeout);
       return response.statusCode == 200;
     } catch (e) {
       return false;
@@ -130,6 +179,24 @@ class ApiService {
       return response.statusCode == 200;
     } catch (e) {
       print('Failed to end meeting via API: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> toggleRoomLock(String roomName, bool isLocked) async {
+    try {
+      final authToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/room/lock'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({'room_id': roomName, 'is_locked': isLocked}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Failed to toggle room lock via API: $e');
       return false;
     }
   }
@@ -393,6 +460,53 @@ class ApiService {
       }
     } catch (e) {
       throw Exception(e.toString().replaceAll('Exception: ', ''));
+    }
+  }
+
+  static Future<Map<String, dynamic>> generateMeetingSummary({
+    required String roomId,
+    String title = '',
+    String? transcriptText,
+    String? audioPath,
+  }) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+
+      final uri = Uri.parse('$baseUrl/api/meeting/summarize');
+      final request = http.MultipartRequest('POST', uri);
+
+      if (authToken != null) {
+        request.headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      request.fields['room_id'] = roomId;
+      if (title.isNotEmpty) {
+        request.fields['title'] = title;
+      }
+      if (transcriptText != null && transcriptText.isNotEmpty) {
+        request.fields['transcript_text'] = transcriptText;
+      }
+
+      if (audioPath != null && audioPath.isNotEmpty) {
+        final audioFile = File(audioPath);
+        if (await audioFile.exists()) {
+          request.files.add(await http.MultipartFile.fromPath('audio_file', audioPath));
+        }
+      }
+
+      final streamedResponse = await request.send().timeout(const Duration(seconds: 90));
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return data;
+      } else {
+        final err = jsonDecode(response.body);
+        throw Exception(err['detail'] ?? 'Failed to generate AI summary');
+      }
+    } catch (e) {
+      throw Exception('AI Summary Error: $e');
     }
   }
 }

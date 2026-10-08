@@ -1,8 +1,11 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import '../api_service.dart';
 import 'video_room_screen.dart';
 import 'account_details_screen.dart';
 
@@ -87,13 +90,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
       );
     } else if (action == 'open_notes') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Notes for "$roomId" are available in your Dashboard.'),
-          backgroundColor: const Color(0xFF00E5FF),
-        ),
-      );
+      _showMeetingRecapDialog(roomId.toString(), data);
     }
+  }
+
+  void _showMeetingRecapDialog(String roomId, Map<String, dynamic> notifData) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF070B19),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) {
+        return _MeetingRecapSheet(
+          roomId: roomId,
+          notifData: notifData,
+        );
+      },
+    );
   }
 
   Future<void> _markAllAsRead(String uid) async {
@@ -537,5 +552,456 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ],
       ),
     );
+  }
+}
+
+class _MeetingRecapSheet extends StatefulWidget {
+  final String roomId;
+  final Map<String, dynamic> notifData;
+
+  const _MeetingRecapSheet({
+    Key? key,
+    required this.roomId,
+    required this.notifData,
+  }) : super(key: key);
+
+  @override
+  State<_MeetingRecapSheet> createState() => _MeetingRecapSheetState();
+}
+
+class _MeetingRecapSheetState extends State<_MeetingRecapSheet> {
+  int _selectedTab = 0; // 0: Executive Summary, 1: Key Takeaways, 2: Action Items, 3: Transcript
+  bool _isLoading = false;
+  Map<String, dynamic>? _aiSummary;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSummary();
+  }
+
+  Future<void> _loadSummary() async {
+    if (widget.notifData['ai_summary'] is Map) {
+      setState(() {
+        _aiSummary = Map<String, dynamic>.from(widget.notifData['ai_summary']);
+      });
+      return;
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('meetings').doc(widget.roomId).get();
+      if (doc.exists && doc.data()?['ai_summary'] is Map) {
+        if (mounted) {
+          setState(() {
+            _aiSummary = Map<String, dynamic>.from(doc.data()!['ai_summary']);
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _generateSummary() async {
+    setState(() => _isLoading = true);
+    try {
+      final res = await ApiService.generateMeetingSummary(
+        roomId: widget.roomId,
+        title: widget.notifData['title'] ?? 'Meeting ${widget.roomId}',
+      );
+      if (mounted && res['summary'] is Map) {
+        setState(() {
+          _aiSummary = Map<String, dynamic>.from(res['summary']);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('AI Generation Notice: $e'),
+            backgroundColor: const Color(0xFFFF5252),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _buildMarkdownMinutes() {
+    final exec = _aiSummary?['executive_summary'] ?? widget.notifData['body'] ?? '';
+    final points = (_aiSummary?['key_points'] as List?)?.map((e) => '- $e').join('\n') ?? '';
+    final actions = (_aiSummary?['action_items'] as List?)?.map((e) => '- [ ] $e').join('\n') ?? '';
+    final transcript = _aiSummary?['transcript'] ?? '';
+
+    return '''# La-Vie Meeting Minutes & Summary
+Room: ${widget.roomId}
+Generated: ${DateTime.now().toLocal().toString().split('.')[0]}
+
+## 📝 Executive Summary
+$exec
+
+## 💡 Key Discussion Takeaways
+${points.isNotEmpty ? points : 'N/A'}
+
+## 🎯 Action Items & Next Steps
+${actions.isNotEmpty ? actions : 'N/A'}
+
+## 📄 Discussion Notes & Transcript
+${transcript.isNotEmpty ? transcript : 'N/A'}
+''';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = widget.notifData['title'] ?? 'Meeting Concluded';
+    final fallbackBody = widget.notifData['body'] ?? 'Thank you for attending!';
+    
+    final execSummary = _aiSummary?['executive_summary'] as String? ?? fallbackBody;
+    final keyPoints = (_aiSummary?['key_points'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final actionItems = (_aiSummary?['action_items'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final transcript = _aiSummary?['transcript'] as String? ?? '';
+
+    return SafeArea(
+      child: Container(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.88),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Header
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF9B51E0), Color(0xFF00E5FF)],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(Icons.auto_awesome, color: Colors.white, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'AI Meeting Summary',
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00E5FF).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.4)),
+                            ),
+                            child: const Text('GEMINI AI', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 9, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text('Room: ${widget.roomId}', style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            // Segmented Tabs
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildTabPill(0, 'Summary', Icons.description_outlined),
+                  const SizedBox(width: 8),
+                  _buildTabPill(1, 'Takeaways', Icons.lightbulb_outline),
+                  const SizedBox(width: 8),
+                  _buildTabPill(2, 'Action Items', Icons.check_circle_outline),
+                  const SizedBox(width: 8),
+                  _buildTabPill(3, 'Transcript', Icons.notes_rounded),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Tab Content Box
+            Flexible(
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: SingleChildScrollView(
+                  child: _buildSelectedTabContent(
+                    execSummary: execSummary,
+                    keyPoints: keyPoints,
+                    actionItems: actionItems,
+                    transcript: transcript,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Actions
+            if (_aiSummary == null)
+              SizedBox(
+                width: double.infinity,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF9B51E0), Color(0xFF00E5FF)],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: ElevatedButton.icon(
+                    icon: _isLoading
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
+                    label: Text(
+                      _isLoading ? 'Generating Summary with Gemini...' : 'Generate AI Minutes & Key Points',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      shadowColor: Colors.transparent,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: _isLoading ? null : _generateSummary,
+                  ),
+                ),
+              ),
+            if (_aiSummary == null) const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.copy_rounded, color: Colors.black, size: 18),
+                    label: const Text('Copy Minutes', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00E5FF),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: _buildMarkdownMinutes()));
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✨ Full formatted AI meeting minutes copied!'),
+                          backgroundColor: Color(0xFF00C853),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.share_rounded, color: Color(0xFF00E5FF), size: 18),
+                    label: const Text('Share Recap', style: TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF00E5FF)),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Share.share(
+                        _buildMarkdownMinutes(),
+                        subject: 'La-Vie Meeting Minutes: ${widget.roomId}',
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabPill(int index, String label, IconData icon) {
+    final isSelected = _selectedTab == index;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedTab = index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF00E5FF) : Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF00E5FF) : Colors.white12,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: isSelected ? Colors.black : Colors.white70),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.black : Colors.white70,
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectedTabContent({
+    required String execSummary,
+    required List<String> keyPoints,
+    required List<String> actionItems,
+    required String transcript,
+  }) {
+    switch (_selectedTab) {
+      case 0:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.description_rounded, color: Color(0xFF00E5FF), size: 18),
+                SizedBox(width: 8),
+                Text('Executive Summary', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              execSummary,
+              style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.6),
+            ),
+          ],
+        );
+      case 1:
+        if (keyPoints.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Text('No discussion takeaways extracted yet. Tap Generate AI Minutes below.', style: TextStyle(color: Colors.white54, fontSize: 12), textAlign: TextAlign.center),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.lightbulb_rounded, color: Color(0xFFFFB300), size: 18),
+                SizedBox(width: 8),
+                Text('Key Takeaways & Decisions', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...keyPoints.map((point) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('💡', style: TextStyle(fontSize: 13)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          point,
+                          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        );
+      case 2:
+        if (actionItems.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Text('No assigned action items extracted yet.', style: TextStyle(color: Colors.white54, fontSize: 12), textAlign: TextAlign.center),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.task_alt_rounded, color: Color(0xFF00FFA3), size: 18),
+                SizedBox(width: 8),
+                Text('Action Items & Next Steps', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...actionItems.map((action) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00FFA3).withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF00FFA3).withOpacity(0.2)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.check_box_outlined, color: Color(0xFF00FFA3), size: 16),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            action,
+                            style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )),
+          ],
+        );
+      case 3:
+      default:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.notes_rounded, color: Color(0xFF9B51E0), size: 18),
+                SizedBox(width: 8),
+                Text('Transcript & Minutes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              transcript.isNotEmpty ? transcript : 'Session transcript archived.',
+              style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.6, fontFamily: 'monospace'),
+            ),
+          ],
+        );
+    }
   }
 }

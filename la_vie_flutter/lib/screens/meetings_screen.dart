@@ -212,15 +212,15 @@ class MeetingsScreen extends StatelessWidget {
 
                                   final hostId = FirebaseAuth.instance.currentUser?.uid ?? '';
 
-                                  final meeting = Meeting(
-                                    id: '',
-                                    title: title,
-                                    roomId: roomId,
-                                    hostId: hostId,
-                                    scheduledTime: scheduledDateTime,
-                                  );
+                                   final meeting = Meeting(
+                                     id: roomId,
+                                     title: title,
+                                     roomId: roomId,
+                                     hostId: hostId,
+                                     scheduledTime: scheduledDateTime,
+                                   );
 
-                                  await FirebaseFirestore.instance.collection('meetings').add(meeting.toFirestore());
+                                   await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
 
                                   final notificationId = roomId.hashCode;
                                   NotificationService().showImmediateNotification(
@@ -752,6 +752,7 @@ class MeetingsScreen extends StatelessWidget {
                           MaterialPageRoute(
                             builder: (context) => VideoRoomScreen(
                                 roomName: meeting.roomId,
+                                meetingTitle: meeting.title,
                                 participantName: FirebaseAuth.instance.currentUser?.displayName ?? 'Premium User',
                                 initialAudioOn: prefs['audio'] ?? true,
                                 initialVideoOn: prefs['video'] ?? true,

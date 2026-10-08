@@ -29,15 +29,21 @@ class _LandingScreenState extends State<LandingScreen> {
     }
     
     final bool isCreating = _roomController.text.trim().isEmpty;
-    final prefs = await showPreJoinDialog(context, isCreating: isCreating);
+    final defaultTitle = "$name's Meeting";
+    final prefs = await showPreJoinDialog(context, isCreating: isCreating, defaultMeetingTitle: defaultTitle);
     if (prefs == null) return;
     if (!mounted) return;
+
+    final meetingTitle = (prefs['title'] is String && (prefs['title'] as String).trim().isNotEmpty)
+        ? (prefs['title'] as String).trim()
+        : (isCreating ? defaultTitle : null);
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => VideoRoomScreen(
           roomName: room, 
+          meetingTitle: meetingTitle,
           participantName: name,
           initialAudioOn: prefs['audio'] ?? true,
           initialVideoOn: prefs['video'] ?? true,

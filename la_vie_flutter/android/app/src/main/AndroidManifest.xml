@@ -7,18 +7,22 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <application
         android:label="La_Vie"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon"
         android:allowBackup="false"
         android:fullBackupContent="false"
+        android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
@@ -43,12 +47,22 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Deep linking intent filter -->
+            <!-- Deep linking intent filter for Conference Meetings -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/" />
+                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/meeting" />
+                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/room" />
+                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/join" />
+                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/conf" />
+                <data android:scheme="https" android:host="la-vie.lifechangerstouch.org" android:pathPrefix="/static" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lavie" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
@@ -61,7 +75,7 @@
             android:name="de.julianassmann.flutter_background.IsolateHolderService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="microphone|mediaPlayback|mediaProjection" />
+            android:foregroundServiceType="microphone|mediaPlayback" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
