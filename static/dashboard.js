@@ -95,29 +95,93 @@ async function fetchMeetings() {
         const querySnapshot = await fbFunctions.getDocs(q);
         meetingList.innerHTML = '';
         
+        const countBadge = document.getElementById("meetingCountBadge");
+        if (countBadge) countBadge.textContent = querySnapshot.size;
+
         if (querySnapshot.empty) {
-            meetingList.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">No upcoming meetings.</p>';
+            meetingList.innerHTML = `
+                <div class="meetings-empty-state">
+                    <div class="empty-icon-wrap">
+                        <span class="material-symbols-outlined">event_note</span>
+                    </div>
+                    <h4>No upcoming meetings</h4>
+                    <p>Your schedule is clear. Plan ahead or start an instant broadcast anytime.</p>
+                    <button id="emptyScheduleBtn" class="primary-btn" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">
+                        <span class="material-symbols-outlined" style="font-size: 16px;">add</span> Schedule Meeting
+                    </button>
+                </div>
+            `;
+            const emptyScheduleBtn = document.getElementById("emptyScheduleBtn");
+            if (emptyScheduleBtn && scheduleModal) {
+                emptyScheduleBtn.onclick = () => { scheduleModal.style.display = "flex"; };
+            }
             return;
         }
 
+        const now = new Date();
         querySnapshot.forEach((doc) => {
             const data = doc.data();
             const li = document.createElement("div");
-            li.className = "meeting-item";
+            li.className = "meeting-item-wrapper";
             
+            const sched = new Date(data.scheduledTime);
+            const diffMinutes = Math.round((sched.getTime() - now.getTime()) / 60000);
+
+            let statusBadgeHtml = '';
+            if (diffMinutes >= -45 && diffMinutes <= 45) {
+                statusBadgeHtml = `<span class="time-badge live-badge"><span class="pulse-status-dot" style="width: 6px; height: 6px; background: #ef4444; box-shadow: 0 0 8px #ef4444;"></span> LIVE NOW</span>`;
+            } else if (sched.toDateString() === now.toDateString()) {
+                const timeStr = sched.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                statusBadgeHtml = `<span class="time-badge today-badge">TODAY • ${timeStr}</span>`;
+            } else {
+                statusBadgeHtml = `<span class="time-badge future-badge">${formatDate(data.scheduledTime)}</span>`;
+            }
+
             // Check for E2EE key in localStorage
             const storedKey = localStorage.getItem(`e2ee_${data.roomId}`);
             const hashSuffix = storedKey ? `#${storedKey}` : '';
             
             li.innerHTML = `
-                <div class="meeting-item-details">
-                    <strong>${data.title || 'Untitled Meeting'}</strong>
-                    <span>${formatDate(data.scheduledTime)} &bull; ${data.roomId}</span>
+                <div class="meeting-card-inner">
+                    <div class="meeting-card-top">
+                        ${statusBadgeHtml}
+                        <span class="meeting-room-pill" title="Click to copy room code" onclick="event.stopPropagation(); if (window.copyMeetingCode) { window.copyMeetingCode('${data.roomId}'); } else { navigator.clipboard.writeText('${data.roomId}'); if (window.showToast) window.showToast('Room code copied: ${data.roomId}'); }">
+                            <code>${data.roomId}</code>
+                            <span class="material-symbols-outlined copy-chip-icon">content_copy</span>
+                        </span>
+                    </div>
+                    <div class="meeting-card-main">
+                        <h4 class="meeting-card-title">${data.title || 'Executive Conference'}</h4>
+                    </div>
+                    <div class="meeting-card-bottom">
+                        <span class="meeting-security-chip">
+                            <span class="material-symbols-outlined" style="font-size: 14px; color: #10B981;">lock</span>
+                            E2EE Encrypted
+                        </span>
+                        <button class="start-meeting-btn" onclick="if (window.initiateJoinFlow) { window.initiateJoinFlow('${data.roomId}', true); } else { window.location.href='?room=${data.roomId}${hashSuffix}'; }">
+                            <span>Start</span>
+                            <span class="material-symbols-outlined" style="font-size: 16px;">arrow_forward</span>
+                        </button>
+                    </div>
                 </div>
-                <button onclick="window.location.href='?room=${data.roomId}${hashSuffix}'">Start</button>
             `;
             meetingList.appendChild(li);
         });
+
+        // Bind header actions
+        const quickScheduleHeaderBtn = document.getElementById("quickScheduleHeaderBtn");
+        if (quickScheduleHeaderBtn && scheduleModal) {
+            quickScheduleHeaderBtn.onclick = () => { scheduleModal.style.display = "flex"; };
+        }
+
+        const toggleQrCardBtn = document.getElementById("toggleQrCardBtn");
+        const qrContainer = document.getElementById("qrContainer");
+        if (toggleQrCardBtn && qrContainer) {
+            toggleQrCardBtn.onclick = () => {
+                const isHidden = qrContainer.style.display === "none";
+                qrContainer.style.display = isHidden ? "block" : "none";
+            };
+        }
     } catch (err) {
         console.error("Error fetching meetings:", err);
         meetingList.innerHTML = '<p class="error-text">Failed to load meetings.</p>';

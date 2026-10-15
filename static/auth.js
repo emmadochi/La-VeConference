@@ -155,6 +155,20 @@ if (googleAuthBtn) {
     });
 }
 
+// Auth Ready tracking
+let _authReadyResolved = false;
+let _authResolvers = [];
+
+export function waitForAuthInit() {
+    if (_authReadyResolved) {
+        return Promise.resolve(auth.currentUser);
+    }
+    return new Promise((resolve) => {
+        _authResolvers.push(resolve);
+    });
+}
+window.waitForAuthInit = waitForAuthInit;
+
 // Logout
 logoutBtn.addEventListener("click", async () => {
     await fbFunctions.signOut(auth);
@@ -162,18 +176,81 @@ logoutBtn.addEventListener("click", async () => {
 
 // Global state listener
 fbFunctions.onAuthStateChanged(auth, (user) => {
+    _authReadyResolved = true;
+    while (_authResolvers.length > 0) {
+        const resolve = _authResolvers.shift();
+        try { resolve(user); } catch (e) { console.error(e); }
+    }
+
     const dashboardSection = document.getElementById("dashboardSection");
     const scheduleMeetingBtn = document.getElementById("scheduleMeetingBtn");
+    const preJoinModal = document.getElementById("preJoinModal");
+    const visitorHero = document.getElementById("visitorHero");
+    const workspaceGreeting = document.getElementById("workspaceGreeting");
+    const greetingNameText = document.getElementById("greetingNameText");
+    const workspaceTimeGreeting = document.getElementById("workspaceTimeGreeting");
+    const workspaceQuickBar = document.getElementById("workspaceQuickBar");
+    const quickPersonalRoomCode = document.getElementById("quickPersonalRoomCode");
+    const navUserAvatar = document.getElementById("navUserAvatar");
+    const dropdownUserAvatar = document.getElementById("dropdownUserAvatar");
+    const dropdownUserName = document.getElementById("dropdownUserName");
+    const dropdownUserEmail = document.getElementById("dropdownUserEmail");
     
     if (user) {
         authSection.style.display = "none";
         userSection.style.display = "flex";
-        navUserName.textContent = user.displayName || user.email.split("@")[0];
         
+        const fullName = user.displayName || (user.email ? user.email.split("@")[0] : "User");
+        const firstName = fullName.split(" ")[0];
+        navUserName.textContent = fullName;
+        
+        // Compute Initials
+        const parts = fullName.trim().split(" ");
+        let initials = parts[0][0].toUpperCase();
+        if (parts.length > 1 && parts[parts.length - 1].length > 0) {
+            initials += parts[parts.length - 1][0].toUpperCase();
+        }
+        if (navUserAvatar) navUserAvatar.textContent = initials;
+        if (dropdownUserAvatar) dropdownUserAvatar.textContent = initials;
+        if (dropdownUserName) dropdownUserName.textContent = fullName;
+        if (dropdownUserEmail) dropdownUserEmail.textContent = user.email || "";
+
+        // Dismiss guest name modal if user is logged in
+        if (preJoinModal) {
+            preJoinModal.style.display = "none";
+        }
+        
+        // Workspace Command Center Transition
+        if (visitorHero) visitorHero.style.display = "none";
+        if (workspaceGreeting) workspaceGreeting.style.display = "block";
+        if (greetingNameText) greetingNameText.textContent = firstName;
+        
+        // Time of day greeting
+        const hour = new Date().getHours();
+        let timeSalutation = "Executive Workspace";
+        if (hour < 12) timeSalutation = "Good morning";
+        else if (hour < 17) timeSalutation = "Good afternoon";
+        else timeSalutation = "Good evening";
+        if (workspaceTimeGreeting) workspaceTimeGreeting.textContent = timeSalutation;
+
+        // Personal Quick Room
+        const pRoom = `la-vie-${(user.uid || "").substring(0, 6)}`;
+        if (quickPersonalRoomCode) quickPersonalRoomCode.textContent = pRoom;
+        if (workspaceQuickBar) workspaceQuickBar.style.display = "inline-flex";
+
+        const copyQuickRoomBtn = document.getElementById("copyQuickRoomBtn");
+        if (copyQuickRoomBtn) {
+            copyQuickRoomBtn.onclick = () => {
+                const fullUrl = `${window.location.origin}/?room=${pRoom}`;
+                navigator.clipboard.writeText(fullUrl);
+                if (window.showToast) window.showToast(`Personal room link copied: ${pRoom}`);
+            };
+        }
+
         const adminBtn = document.getElementById("adminBtn");
         if (adminBtn) {
             if (user.email === "la-vie@adminnew.com") {
-                adminBtn.style.display = "inline-block";
+                adminBtn.style.display = "flex";
             } else {
                 adminBtn.style.display = "none";
             }
@@ -190,6 +267,11 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
         userSection.style.display = "none";
         navUserName.textContent = "";
         
+        // Restore Visitor Hero
+        if (visitorHero) visitorHero.style.display = "block";
+        if (workspaceGreeting) workspaceGreeting.style.display = "none";
+        if (workspaceQuickBar) workspaceQuickBar.style.display = "none";
+
         // Hide auth-required elements
         if (dashboardSection) dashboardSection.style.display = "none";
         if (scheduleMeetingBtn) scheduleMeetingBtn.style.display = "none";
@@ -198,6 +280,32 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
     }
 });
 
+// User Profile Dropdown handlers
+const userProfileBtn = document.getElementById("userProfileBtn");
+const userProfileDropdown = document.getElementById("userProfileDropdown");
+if (userProfileBtn && userProfileDropdown) {
+    userProfileBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = userProfileDropdown.style.display === "flex";
+        userProfileDropdown.style.display = isOpen ? "none" : "flex";
+    });
+
+    window.addEventListener("click", (e) => {
+        if (!userProfileDropdown.contains(e.target) && e.target !== userProfileBtn) {
+            userProfileDropdown.style.display = "none";
+        }
+    });
+}
+
+const scheduleFromMenuBtn = document.getElementById("scheduleFromMenuBtn");
+if (scheduleFromMenuBtn) {
+    scheduleFromMenuBtn.addEventListener("click", () => {
+        if (userProfileDropdown) userProfileDropdown.style.display = "none";
+        const scheduleModal = document.getElementById("scheduleModal");
+        if (scheduleModal) scheduleModal.style.display = "flex";
+    });
+}
+
 // Utility to get Token
 export async function getAuthToken() {
     if (auth.currentUser) {
@@ -205,3 +313,4 @@ export async function getAuthToken() {
     }
     return null;
 }
+

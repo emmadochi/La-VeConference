@@ -186,7 +186,7 @@ function generateRoomCode() {
 // ==========================================
 // JOIN FLOW & ACTIVE MEETING INTERCEPT
 // ==========================================
-export function initiateJoinFlow(roomId, isHost = false) {
+export async function initiateJoinFlow(roomId, isHost = false) {
     try {
         const url = new URL(roomId);
         const urlRoom = url.searchParams.get('room');
@@ -195,6 +195,32 @@ export function initiateJoinFlow(roomId, isHost = false) {
 
     const cleanRoomId = roomId.trim();
     if (!cleanRoomId) return;
+
+    state.pendingRoomId = cleanRoomId;
+    state.isHost = isHost;
+
+    // STEP 0: Wait for Firebase Auth persistence check if not yet ready
+    let user = window.firebaseAuth && window.firebaseAuth.currentUser;
+    if (!user && window.waitForAuthInit) {
+        try {
+            user = await Promise.race([
+                window.waitForAuthInit(),
+                new Promise(resolve => setTimeout(() => resolve(window.firebaseAuth ? window.firebaseAuth.currentUser : null), 2500))
+            ]);
+        } catch (_) {
+            user = window.firebaseAuth ? window.firebaseAuth.currentUser : null;
+        }
+    }
+
+    // REQUIRE LOGIN: No one can join without logging in!
+    if (!user) {
+        if (preJoinModal) preJoinModal.style.display = 'none';
+        showToast("Please log in or sign up to join the meeting.");
+        if (window.openAuthModal) {
+            window.openAuthModal(true);
+        }
+        return;
+    }
 
     // STEP 0: ACTIVE MEETING CONFLICT CHECK (Feature 4)
     if (state.currentRoom && (state.currentRoom.state === 'connected' || state.currentRoom.state === 'connecting')) {
@@ -223,43 +249,59 @@ export function initiateJoinFlow(roomId, isHost = false) {
                 leaveAndJoinBtn.onclick = () => {
                     closeConflict();
                     leaveCall(); // Cleanly disconnect old room
-                    proceedWithJoin(cleanRoomId, isHost);
+                    proceedWithJoin(cleanRoomId, isHost, user);
                 };
             }
             return;
         }
     }
 
-    proceedWithJoin(cleanRoomId, isHost);
+    proceedWithJoin(cleanRoomId, isHost, user);
 }
 window.initiateJoinFlow = initiateJoinFlow;
 
-function proceedWithJoin(roomId, isHost = false) {
+function proceedWithJoin(roomId, isHost = false, user = null) {
     state.pendingRoomId = roomId;
     state.isHost = isHost;
-    const user = window.firebaseAuth && window.firebaseAuth.currentUser;
-
-    if (user && user.displayName) {
-        state.userName = user.displayName;
-        // STEP 1: PRE-CALL GREEN ROOM (Feature 1)
-        openGreenRoom(state.pendingRoomId, state.userName, (options) => {
-            startCall(state.pendingRoomId, options);
-        }, null, isHost);
-    } else {
-        if (preJoinModal) {
-            preJoinModal.style.display = 'flex';
-        } else {
-            openGreenRoom(state.pendingRoomId, state.userName, (options) => {
-                startCall(state.pendingRoomId, options);
-            }, null, isHost);
-        }
+    if (!user) {
+        user = window.firebaseAuth && window.firebaseAuth.currentUser;
     }
+
+    if (!user) {
+        // Enforce login requirement: no anonymous joining
+        if (preJoinModal) preJoinModal.style.display = 'none';
+        showToast("Please log in to join the meeting.");
+        if (window.openAuthModal) {
+            window.openAuthModal(true);
+        }
+        return;
+    }
+
+    // Dismiss guest name modal if it was visible
+    if (preJoinModal) preJoinModal.style.display = 'none';
+
+    // Set authenticated user's name
+    state.userName = user.displayName || (user.email ? user.email.split('@')[0] : "User");
+
+    // STEP 1: PRE-CALL GREEN ROOM (Feature 1)
+    openGreenRoom(state.pendingRoomId, state.userName, (options) => {
+        startCall(state.pendingRoomId, options);
+    }, null, isHost);
 }
 
 if (preJoinSubmitBtn) {
     preJoinSubmitBtn.addEventListener('click', () => {
-        if (userNameInput) {
-            state.userName = userNameInput.value.trim() || "Anonymous";
+        const user = window.firebaseAuth && window.firebaseAuth.currentUser;
+        if (!user) {
+            if (preJoinModal) preJoinModal.style.display = 'none';
+            showToast("Please log in to join the meeting.");
+            if (window.openAuthModal) window.openAuthModal(true);
+            return;
+        }
+        if (userNameInput && userNameInput.value.trim()) {
+            state.userName = userNameInput.value.trim();
+        } else {
+            state.userName = user.displayName || (user.email ? user.email.split('@')[0] : "User");
         }
         if (preJoinModal) preJoinModal.style.display = 'none';
 
@@ -269,6 +311,20 @@ if (preJoinSubmitBtn) {
         }, null, state.isHost);
     });
 }
+
+// Automatically resume pending meeting join after user signs in / logs in
+window.addEventListener('authStateChanged', (e) => {
+    const user = e.detail && e.detail.user;
+    if (user) {
+        if (preJoinModal) preJoinModal.style.display = 'none';
+        if (state.pendingRoomId && (!state.currentRoom || state.currentRoom.state !== 'connected')) {
+            const greenRoomOverlay = document.getElementById('greenRoomOverlay');
+            if (!greenRoomOverlay || greenRoomOverlay.style.display === 'none') {
+                proceedWithJoin(state.pendingRoomId, state.isHost, user);
+            }
+        }
+    }
+});
 
 // ==========================================
 // MEDIA CONTROLS

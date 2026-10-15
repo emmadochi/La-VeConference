@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>La-Vie Conference App - WebRTC</title>
-    <link rel="stylesheet" href="/static/style.css?v=6">
+    <link rel="stylesheet" href="/static/style.css?v=7">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -32,9 +32,33 @@
                     <button id="signupBtn" class="nav-btn primary">Sign Up</button>
                 </div>
                 <div class="user-section" id="userSection" style="display: none;">
-                    <span id="navUserName" class="user-name">User</span>
-                    <a href="/admin" id="adminBtn" class="nav-btn" style="text-decoration: none; color: inherit;">Admin</a>
-                    <button id="logoutBtn" class="nav-btn">Log Out</button>
+                    <div class="user-profile-menu-container">
+                        <button id="userProfileBtn" class="user-profile-chip" aria-haspopup="true" title="Account Menu">
+                            <div class="user-avatar-badge" id="navUserAvatar">U</div>
+                            <span id="navUserName" class="user-name">User</span>
+                            <span class="material-symbols-outlined dropdown-chevron">expand_more</span>
+                        </button>
+                        <div id="userProfileDropdown" class="user-dropdown-menu glassmorphic" style="display: none;">
+                            <div class="user-dropdown-header">
+                                <div class="user-avatar-lg" id="dropdownUserAvatar">U</div>
+                                <div class="user-dropdown-info">
+                                    <strong id="dropdownUserName">User</strong>
+                                    <span id="dropdownUserEmail" class="dropdown-email">user@example.com</span>
+                                </div>
+                            </div>
+                            <div class="dropdown-divider"></div>
+                            <a href="/admin" id="adminBtn" class="dropdown-item" style="display: none; text-decoration: none;">
+                                <span class="material-symbols-outlined">admin_panel_settings</span> Admin Console
+                            </a>
+                            <button id="scheduleFromMenuBtn" class="dropdown-item">
+                                <span class="material-symbols-outlined">calendar_add_on</span> Schedule Meeting
+                            </button>
+                            <div class="dropdown-divider"></div>
+                            <button id="logoutBtn" class="dropdown-item logout-item">
+                                <span class="material-symbols-outlined">logout</span> Sign Out
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </header>
@@ -44,12 +68,30 @@
             <!-- Hero Section -->
             <section class="hero-section">
                 <div class="hero-content">
-                    <div class="hero-badge" style="display: inline-flex; align-items: center; gap: 6px;">
-                        <span class="material-symbols-outlined" style="font-size: 16px; color: #00e5ff;">sensors</span> 
-                        vMix &amp; OBS Live Ingest Supported • Sub-Second Latency
+                    <!-- Guest Hero Content -->
+                    <div id="visitorHero" class="hero-text-block">
+                        <div class="hero-badge" style="display: inline-flex; align-items: center; gap: 6px;">
+                            <span class="material-symbols-outlined" style="font-size: 16px; color: #00e5ff;">sensors</span> 
+                            vMix &amp; OBS Live Ingest Supported • Sub-Second Latency
+                        </div>
+                        <h1 class="hero-title">Professional Video Meetings &amp; Broadcasts.<br><span class="highlight">Free for Everyone.</span></h1>
+                        <p class="hero-subtitle">Connect teams, run virtual conferences, and stream live studio productions from anywhere with enterprise WebRTC technology.</p>
                     </div>
-                    <h1 class="hero-title">Professional Video Meetings &amp; Broadcasts.<br><span class="highlight">Free for Everyone.</span></h1>
-                    <p class="hero-subtitle">Connect teams, run virtual conferences, and stream live vMix studio productions from anywhere with low-latency WebRTC technology.</p>
+
+                    <!-- Authenticated Executive Command Center Hero -->
+                    <div id="workspaceGreeting" class="hero-text-block workspace-hero-block" style="display: none;">
+                        <div class="workspace-status-badge">
+                            <span class="pulse-status-dot"></span>
+                            <span id="workspaceTimeGreeting">Executive Workspace</span>
+                        </div>
+                        <h1 class="hero-title workspace-title">
+                            Ready for your next call,<br>
+                            <span class="highlight" id="greetingNameText">Emmanuel</span>
+                        </h1>
+                        <p class="hero-subtitle workspace-subtitle">
+                            Launch an instant broadcast, start an upcoming conference, or join via room code.
+                        </p>
+                    </div>
                     
                     <div class="hero-actions hero-actions-v2">
                         <!-- Tier 1: Primary CTA -->
@@ -58,15 +100,16 @@
                                 <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
                                     <span class="material-symbols-outlined">video_call</span>
                                     New meeting
+                                    <span class="material-symbols-outlined" style="font-size: 18px; margin-left: 2px;">arrow_drop_down</span>
                                 </button>
                                 <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
                                     <button id="instantMeetingBtn" class="dropdown-item">
-                                        <span class="material-symbols-outlined">add</span> 
+                                        <span class="material-symbols-outlined">bolt</span> 
                                         Start an instant meeting
                                     </button>
                                     <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
                                         <span class="material-symbols-outlined">calendar_today</span> 
-                                        Schedule in database
+                                        Schedule in calendar
                                     </button>
                                 </div>
                             </div>
@@ -76,10 +119,23 @@
                         <div class="action-tier--secondary">
                             <div class="input-group meet-input-group glass-input">
                                 <span class="material-symbols-outlined input-icon">keyboard</span>
-                                <input type="text" id="roomId" placeholder="Enter a code or link">
+                                <input type="text" id="roomId" placeholder="Enter a code or link" autocomplete="off" spellcheck="false">
                                 <button id="joinBtn" class="text-btn" disabled>Join</button>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- Authenticated Quick Bar: Personal Room Link -->
+                    <div id="workspaceQuickBar" class="workspace-quick-bar" style="display: none;">
+                        <span class="quick-bar-label">
+                            <span class="material-symbols-outlined" style="font-size: 15px; color: #00e5ff;">verified_user</span> 
+                            Instant Room:
+                        </span>
+                        <span class="quick-room-code" id="quickPersonalRoomCode">la-vie-...</span>
+                        <button id="copyQuickRoomBtn" class="quick-copy-btn" title="Copy Room Link">
+                            <span class="material-symbols-outlined" style="font-size: 15px;">content_copy</span>
+                            Copy Link
+                        </button>
                     </div>
                 </div>
 
@@ -101,17 +157,31 @@
                         </div>
                         
                         <div class="dashboard-header">
-                            <h3>Upcoming Meetings</h3>
-                            <span class="material-symbols-outlined">event</span>
+                            <div class="dashboard-title-wrap">
+                                <h3>Upcoming Meetings</h3>
+                                <span class="meeting-count-badge" id="meetingCountBadge">0</span>
+                            </div>
+                            <div class="dashboard-header-actions">
+                                <button id="quickScheduleHeaderBtn" class="header-action-btn" title="Schedule new meeting">
+                                    <span class="material-symbols-outlined">add</span>
+                                </button>
+                                <button id="toggleQrCardBtn" class="header-action-btn" title="Toggle Mobile QR">
+                                    <span class="material-symbols-outlined">qr_code_2</span>
+                                </button>
+                            </div>
                         </div>
                         <div id="meetingList" class="meeting-list">
-                            <!-- Filled by JS -->
+                            <!-- Filled dynamically by JS -->
                         </div>
                     </div>
                     
                     <!-- Glassmorphic QR Card -->
                     <div class="qr-container glass-card" id="qrContainer">
-                        <p class="qr-title">Join via Mobile</p>
+                        <div class="qr-card-header">
+                            <p class="qr-title">Join via Mobile</p>
+                            <span class="material-symbols-outlined" style="color: #00e5ff; font-size: 20px;">smartphone</span>
+                        </div>
+                        <p class="qr-subtitle">Scan with your phone camera to seamlessly join the call on mobile.</p>
                         <div class="qr-box">
                             <img id="qrCodeImg" class="qr-image" src="" alt="QR Code to connect phone">
                         </div>
@@ -255,7 +325,7 @@
                 <button class="close-modal">&times;</button>
                 <h2>What's your name?</h2>
                 <p class="modal-desc">Others in the call will see this name.</p>
-                <input type="text" id="userName" class="modal-input" placeholder="Your Name" value="Anonymous">
+                <input type="text" id="userName" class="modal-input" placeholder="Your Name" value="">
                 <button id="preJoinSubmitBtn" class="primary-btn full-width">Continue</button>
             </div>
         </div>
@@ -1191,8 +1261,8 @@
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script type="module" src="/static/firebase-config.js"></script>
-    <script type="module" src="/static/auth.js"></script>
-    <script type="module" src="/static/dashboard.js?v=2"></script>
-    <script type="module" src="/static/app.js?v=6"></script>
+    <script type="module" src="/static/auth.js?v=3"></script>
+    <script type="module" src="/static/dashboard.js?v=4"></script>
+    <script type="module" src="/static/app.js?v=8"></script>
 </body>
 </html>

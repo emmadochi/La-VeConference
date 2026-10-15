@@ -1193,43 +1193,50 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
     except Exception:
         db = None
     
-    # Check for Firebase Auth Token
+    # Check for Firebase Auth Token - REQUIRE LOGIN
     auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split("Bearer ")[1]
-        try:
-            decoded_token = auth.verify_id_token(token)
-            uid = decoded_token.get("uid")
-            firebase_name = decoded_token.get("name")
-            if not firebase_name:
-                email = decoded_token.get("email", "")
-                firebase_name = email.split("@")[0] if email else "Anonymous"
-            name = firebase_name
-            is_admin = True
-            logger.info(f"Verified Firebase user: {name} for room {room_id}")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. You must log in to join a meeting."
+        )
 
-            # Automatically update active meeting for the user account
-            if uid:
-                db = firestore.client()
-                user_ref = db.collection("users").document(uid)
-                try:
-                    user_doc = user_ref.get()
-                    if user_doc.exists:
-                        data = user_doc.to_dict()
-                        active_room = data.get("active_room")
-                        if active_room and active_room != room_id:
-                            logger.info(f"User {uid} transitioning from active room {active_room} to {room_id}")
-                except Exception as e:
-                    logger.warning(f"Error checking prior active room: {e}")
-                
-                # Update their active room
-                user_ref.set({"active_room": room_id}, merge=True)
+    token = auth_header.split("Bearer ")[1]
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get("uid")
+        firebase_name = decoded_token.get("name")
+        if not firebase_name:
+            email = decoded_token.get("email", "")
+            firebase_name = email.split("@")[0] if email else (name if name and name != "Anonymous" else "User")
+        name = firebase_name
+        is_admin = True
+        logger.info(f"Verified Firebase user: {name} for room {room_id}")
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Firebase token verification failed: {e}")
-            # Fall back to guest
+        # Automatically update active meeting for the user account
+        if uid and db:
+            user_ref = db.collection("users").document(uid)
+            try:
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    data = user_doc.to_dict()
+                    active_room = data.get("active_room")
+                    if active_room and active_room != room_id:
+                        logger.info(f"User {uid} transitioning from active room {active_room} to {room_id}")
+            except Exception as e:
+                logger.warning(f"Error checking prior active room: {e}")
+            
+            # Update their active room
+            user_ref.set({"active_room": room_id}, merge=True)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Firebase token verification failed: {e}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session. Please log in again."
+        )
 
     # Check if meeting has been locked by the host
     if db:
@@ -3489,19 +3496,27 @@ async def respond_to_contact_request(request: Request):
     req_ref = db.collection("users").document(responder_uid) \
         .collection("contact_requests").document(sender_uid)
     req_doc = req_ref.get()
-    if not req_doc.exists:
-        raise HTTPException(status_code=404, detail="Contact request not found")
-
-    req_data = req_doc.to_dict() or {}
-    sender_name   = req_data.get("sender_name")   or "LiChat User"
-    sender_avatar = req_data.get("sender_avatar") or ""
 
     if action == "decline":
-        req_ref.delete()
+        if req_doc.exists:
+            req_ref.delete()
         # Clean up sender's outgoing tracker
         db.collection("users").document(sender_uid) \
             .collection("outgoing_requests").document(responder_uid).delete()
         return {"status": "declined", "message": "Request declined."}
+
+    req_data = req_doc.to_dict() if req_doc.exists else {}
+    sender_name   = req_data.get("sender_name") or ""
+    sender_avatar = req_data.get("sender_avatar") or ""
+
+    if not sender_name:
+        sender_doc = db.collection("users").document(sender_uid).get()
+        if sender_doc.exists:
+            sd = sender_doc.to_dict() or {}
+            sender_name = sd.get("displayName") or sd.get("name") or "LiChat User"
+            sender_avatar = sd.get("photoURL") or sd.get("photoUrl") or sd.get("avatar") or ""
+        else:
+            sender_name = "LiChat User"
 
     # ACCEPT — perform mutual pairing
     now = datetime.now(timezone.utc)
