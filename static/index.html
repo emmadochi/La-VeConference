@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>La-Vie Conference App - WebRTC</title>
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=9">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -85,8 +85,7 @@
                             <span id="workspaceTimeGreeting">Executive Workspace</span>
                         </div>
                         <h1 class="hero-title workspace-title">
-                            Ready for your next call,<br>
-                            <span class="highlight" id="greetingNameText">Emmanuel</span>
+                            Ready for your next call, <span class="highlight" id="greetingNameText">Emmanuel</span>
                         </h1>
                         <p class="hero-subtitle workspace-subtitle">
                             Launch an instant broadcast, start an upcoming conference, or join via room code.
@@ -94,47 +93,41 @@
                     </div>
                     
                     <div class="hero-actions hero-actions-v2">
-                        <!-- Tier 1: Primary CTA -->
-                        <div class="action-tier--primary">
-                            <div class="new-meeting-wrapper">
-                                <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
-                                    <span class="material-symbols-outlined">video_call</span>
-                                    New meeting
-                                    <span class="material-symbols-outlined" style="font-size: 18px; margin-left: 2px;">arrow_drop_down</span>
+                        <div class="new-meeting-wrapper">
+                            <button id="newMeetingBtn" class="primary-btn meet-btn pulse-anim">
+                                <span class="material-symbols-outlined">video_call</span>
+                                <span>New meeting</span>
+                                <span class="material-symbols-outlined" style="font-size: 18px; margin-left: 2px;">arrow_drop_down</span>
+                            </button>
+                            <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
+                                <button id="instantMeetingBtn" class="dropdown-item">
+                                    <span class="material-symbols-outlined">bolt</span> 
+                                    Start an instant meeting
                                 </button>
-                                <div class="dropdown-menu glassmorphic" id="newMeetingDropdown" style="display: none;">
-                                    <button id="instantMeetingBtn" class="dropdown-item">
-                                        <span class="material-symbols-outlined">bolt</span> 
-                                        Start an instant meeting
-                                    </button>
-                                    <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
-                                        <span class="material-symbols-outlined">calendar_today</span> 
-                                        Schedule in calendar
-                                    </button>
-                                </div>
+                                <button id="scheduleMeetingBtn" class="dropdown-item auth-required" style="display: none;">
+                                    <span class="material-symbols-outlined">calendar_today</span> 
+                                    Schedule in calendar
+                                </button>
                             </div>
                         </div>
 
-                        <!-- Tier 2: Secondary — join existing meeting -->
-                        <div class="action-tier--secondary">
-                            <div class="input-group meet-input-group glass-input">
-                                <span class="material-symbols-outlined input-icon">keyboard</span>
-                                <input type="text" id="roomId" placeholder="Enter a code or link" autocomplete="off" spellcheck="false">
-                                <button id="joinBtn" class="text-btn" disabled>Join</button>
-                            </div>
+                        <div class="input-group meet-input-group glass-input">
+                            <span class="material-symbols-outlined input-icon">keyboard</span>
+                            <input type="text" id="roomId" name="roomCodeField" placeholder="Enter a code or link" autocomplete="off" spellcheck="false" autocapitalize="none">
+                            <button id="joinBtn" class="text-btn" disabled>Join</button>
                         </div>
                     </div>
 
                     <!-- Authenticated Quick Bar: Personal Room Link -->
                     <div id="workspaceQuickBar" class="workspace-quick-bar" style="display: none;">
                         <span class="quick-bar-label">
-                            <span class="material-symbols-outlined" style="font-size: 15px; color: #00e5ff;">verified_user</span> 
-                            Instant Room:
+                            <span class="material-symbols-outlined quick-bar-icon">shield_person</span> 
+                            Instant room:
                         </span>
                         <span class="quick-room-code" id="quickPersonalRoomCode">la-vie-...</span>
                         <button id="copyQuickRoomBtn" class="quick-copy-btn" title="Copy Room Link">
-                            <span class="material-symbols-outlined" style="font-size: 15px;">content_copy</span>
-                            Copy Link
+                            <span class="material-symbols-outlined">content_copy</span>
+                            <span>Copy link</span>
                         </button>
                     </div>
                 </div>
@@ -165,9 +158,6 @@
                                 <button id="quickScheduleHeaderBtn" class="header-action-btn" title="Schedule new meeting">
                                     <span class="material-symbols-outlined">add</span>
                                 </button>
-                                <button id="toggleQrCardBtn" class="header-action-btn" title="Toggle Mobile QR">
-                                    <span class="material-symbols-outlined">qr_code_2</span>
-                                </button>
                             </div>
                         </div>
                         <div id="meetingList" class="meeting-list">
@@ -175,17 +165,36 @@
                         </div>
                     </div>
                     
-                    <!-- Glassmorphic QR Card -->
-                    <div class="qr-container glass-card" id="qrContainer">
-                        <div class="qr-card-header">
-                            <p class="qr-title">Join via Mobile</p>
-                            <span class="material-symbols-outlined" style="color: #00e5ff; font-size: 20px;">smartphone</span>
+                    <!-- Guest Feature Showcase Card (Displayed only for unauthenticated visitors) -->
+                    <div class="showcase-container glass-card" id="visitorHeroCard">
+                        <div class="showcase-header">
+                            <div class="showcase-badge">
+                                <span class="pulse-status-dot"></span>
+                                <span>Enterprise Ready</span>
+                            </div>
+                            <span class="material-symbols-outlined" style="color: #00e5ff; font-size: 22px;">podium</span>
                         </div>
-                        <p class="qr-subtitle">Scan with your phone camera to seamlessly join the call on mobile.</p>
-                        <div class="qr-box">
-                            <img id="qrCodeImg" class="qr-image" src="" alt="QR Code to connect phone">
+                        <h4 class="showcase-title">Next-Gen Virtual Conferences</h4>
+                        <p class="showcase-subtitle">Designed for crystal-clear team collaboration, live vMix studio ingest, and ultra-low latency WebRTC broadcasts.</p>
+                        
+                        <div class="showcase-pills">
+                            <div class="showcase-pill">
+                                <span class="material-symbols-outlined">live_tv</span>
+                                <span>vMix &amp; OBS Ingest</span>
+                            </div>
+                            <div class="showcase-pill">
+                                <span class="material-symbols-outlined">lock</span>
+                                <span>E2EE Encrypted</span>
+                            </div>
+                            <div class="showcase-pill">
+                                <span class="material-symbols-outlined">speed</span>
+                                <span>Sub-Second Latency</span>
+                            </div>
+                            <div class="showcase-pill">
+                                <span class="material-symbols-outlined">high_quality</span>
+                                <span>1080p 60fps Feeds</span>
+                            </div>
                         </div>
-                        <p class="qr-url-text" id="qrUrlText"></p>
                     </div>
                 </div>
             </section>
@@ -1261,8 +1270,8 @@
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script type="module" src="/static/firebase-config.js"></script>
-    <script type="module" src="/static/auth.js?v=3"></script>
-    <script type="module" src="/static/dashboard.js?v=4"></script>
-    <script type="module" src="/static/app.js?v=8"></script>
+    <script type="module" src="/static/auth.js?v=5"></script>
+    <script type="module" src="/static/dashboard.js?v=6"></script>
+    <script type="module" src="/static/app.js?v=10"></script>
 </body>
 </html>

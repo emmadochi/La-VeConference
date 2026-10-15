@@ -186,6 +186,7 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
     const scheduleMeetingBtn = document.getElementById("scheduleMeetingBtn");
     const preJoinModal = document.getElementById("preJoinModal");
     const visitorHero = document.getElementById("visitorHero");
+    const visitorHeroCard = document.getElementById("visitorHeroCard");
     const workspaceGreeting = document.getElementById("workspaceGreeting");
     const greetingNameText = document.getElementById("greetingNameText");
     const workspaceTimeGreeting = document.getElementById("workspaceTimeGreeting");
@@ -222,6 +223,7 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
         
         // Workspace Command Center Transition
         if (visitorHero) visitorHero.style.display = "none";
+        if (visitorHeroCard) visitorHeroCard.style.display = "none";
         if (workspaceGreeting) workspaceGreeting.style.display = "block";
         if (greetingNameText) greetingNameText.textContent = firstName;
         
@@ -269,6 +271,7 @@ fbFunctions.onAuthStateChanged(auth, (user) => {
         
         // Restore Visitor Hero
         if (visitorHero) visitorHero.style.display = "block";
+        if (visitorHeroCard) visitorHeroCard.style.display = "block";
         if (workspaceGreeting) workspaceGreeting.style.display = "none";
         if (workspaceQuickBar) workspaceQuickBar.style.display = "none";
 

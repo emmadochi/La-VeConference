@@ -346,21 +346,22 @@ body {
 
 /* Authenticated Personal Room Quick Bar */
 .workspace-quick-bar {
-    margin-top: 24px;
+    margin-top: 18px;
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    background: rgba(255, 255, 255, 0.04);
+    gap: 8px;
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    font-size: 0.85rem;
+    border-radius: 100px;
+    font-size: 0.82rem;
     backdrop-filter: blur(12px);
     transition: all 0.2s ease;
+    color: var(--text-muted);
 }
 
 .workspace-quick-bar:hover {
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.06);
     border-color: rgba(0, 229, 255, 0.3);
 }
 
@@ -368,25 +369,34 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    color: var(--text-muted);
+    color: rgba(255, 255, 255, 0.7);
     font-weight: 500;
 }
 
+.quick-bar-label .quick-bar-icon {
+    font-size: 16px;
+    color: #00e5ff;
+}
+
 .quick-room-code {
-    font-family: monospace;
-    font-size: 0.9rem;
+    font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    font-size: 0.85rem;
     color: #00e5ff;
     font-weight: 600;
+    background: rgba(0, 229, 255, 0.08);
+    padding: 2px 8px;
+    border-radius: 6px;
+    letter-spacing: 0.3px;
 }
 
 .quick-copy-btn {
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.25);
-    color: #00e5ff;
-    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    padding: 3px 9px;
     border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 600;
+    font-size: 0.78rem;
+    font-weight: 500;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -396,6 +406,7 @@ body {
 
 .quick-copy-btn:hover {
     background: #00e5ff;
+    border-color: #00e5ff;
     color: #050505;
     transform: translateY(-1px);
 }
@@ -1719,12 +1730,12 @@ video {
 
 .dashboard-section {
     width: 100%;
-    max-width: 400px;
+    max-width: 440px;
     background: var(--card-bg);
     border: 1px solid var(--glass-border);
     border-radius: 20px;
-    padding: 20px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    padding: 22px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 }
 
 .dashboard-section h3 {
@@ -1980,19 +1991,91 @@ video {
     line-height: 1.4;
 }
 
-/* QR Card Polish */
-.qr-card-header {
+/* Guest Feature Showcase Card */
+.showcase-container {
+    width: 100%;
+    max-width: 440px;
+    background: var(--card-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: transform 0.3s ease, border-color 0.3s ease;
+}
+
+.showcase-container:hover {
+    border-color: rgba(0, 229, 255, 0.3);
+    transform: translateY(-3px);
+}
+
+.showcase-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: 12px;
 }
 
-.qr-subtitle {
-    margin: 0 0 16px 0;
-    font-size: 0.85rem;
+.showcase-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 229, 255, 0.08);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #00e5ff;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.showcase-title {
+    margin: 0 0 8px 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.35;
+}
+
+.showcase-subtitle {
+    margin: 0 0 20px 0;
+    font-size: 0.88rem;
     color: var(--text-muted);
-    line-height: 1.4;
+    line-height: 1.5;
+}
+
+.showcase-pills {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+.showcase-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    transition: all 0.2s ease;
+}
+
+.showcase-pill:hover {
+    background: rgba(0, 229, 255, 0.07);
+    border-color: rgba(0, 229, 255, 0.2);
+    color: #fff;
+}
+
+.showcase-pill .material-symbols-outlined {
+    font-size: 18px;
+    color: #00e5ff;
 }
 
 /* Modals */
@@ -4642,34 +4725,127 @@ body.is-native-app .hero-section h1 {
     }
 }
 
-/* Hero actions — two-tier layout */
+/* Hero actions — Modern Google Meet / Linear unified side-by-side layout */
 .hero-actions-v2 {
     display: flex;
-    flex-direction: column;
-    gap: 16px;
-    align-items: flex-start;
+    flex-direction: row;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
-.hero-actions-v2 .action-tier--primary {
-    display: flex;
-    gap: 12px;
-    align-items: center;
+.hero-actions-v2 .new-meeting-wrapper {
+    position: relative;
+    display: inline-flex;
 }
 
-.hero-actions-v2 .action-tier--secondary {
-    display: flex;
-    gap: 12px;
+.hero-actions-v2 .primary-btn.meet-btn {
+    height: 48px;
+    padding: 0 20px;
+    display: inline-flex;
     align-items: center;
-    width: 100%;
+    gap: 8px;
+    border-radius: 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+.hero-actions-v2 .input-group.glass-input,
+.input-group.meet-input-group {
+    height: 48px;
+    padding: 0 10px 0 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(18, 22, 38, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    box-sizing: border-box;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    transition: all 0.2s ease;
+}
+
+.hero-actions-v2 .input-group.glass-input:focus-within,
+.input-group.meet-input-group:focus-within {
+    border-color: #00e5ff;
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.25);
+    background: rgba(22, 28, 48, 0.9);
+}
+
+.hero-actions-v2 .input-group.glass-input input,
+.input-group.meet-input-group input {
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    color: #ffffff !important;
+    font-size: 0.92rem;
+    width: 200px;
+    padding: 0;
+    height: 100%;
+}
+
+.hero-actions-v2 .input-group.glass-input input::placeholder,
+.input-group.meet-input-group input::placeholder {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* Chrome / Safari / Edge autofill dark override */
+.input-group.glass-input input:-webkit-autofill,
+.input-group.glass-input input:-webkit-autofill:hover,
+.input-group.glass-input input:-webkit-autofill:focus,
+.input-group.glass-input input:-webkit-autofill:active,
+.input-group.meet-input-group input:-webkit-autofill,
+.input-group.meet-input-group input:-webkit-autofill:hover,
+.input-group.meet-input-group input:-webkit-autofill:focus,
+.input-group.meet-input-group input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px #121626 inset !important;
+    -webkit-text-fill-color: #ffffff !important;
+    transition: background-color 5000s ease-in-out 0s;
+    caret-color: #00e5ff !important;
+}
+
+.hero-actions-v2 .input-group.glass-input .text-btn,
+.input-group.meet-input-group .text-btn {
+    background: transparent;
+    border: none;
+    color: #00e5ff;
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 6px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.hero-actions-v2 .input-group.glass-input .text-btn:disabled,
+.input-group.meet-input-group .text-btn:disabled {
+    color: rgba(255, 255, 255, 0.25);
+    cursor: not-allowed;
+    background: transparent;
+}
+
+.hero-actions-v2 .input-group.glass-input .text-btn:not(:disabled):hover,
+.input-group.meet-input-group .text-btn:not(:disabled):hover {
+    background: rgba(0, 229, 255, 0.15);
+    color: #00e5ff;
 }
 
 @media (max-width: 600px) {
     .hero-actions-v2 {
+        flex-direction: column;
         align-items: stretch;
     }
-    .hero-actions-v2 .action-tier--primary,
-    .hero-actions-v2 .action-tier--secondary {
-        flex-direction: column;
+    .hero-actions-v2 .input-group.glass-input,
+    .hero-actions-v2 .new-meeting-wrapper,
+    .hero-actions-v2 .primary-btn.meet-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .hero-actions-v2 .input-group.glass-input input {
+        width: 100%;
     }
 }
 

@@ -107,14 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initChatListeners();
     initPollsAndQaListeners();
 
-    // QR Code generation on landing
-    const qrCodeImg = document.getElementById('qrCodeImg');
-    const qrUrlText = document.getElementById('qrUrlText');
-    if (qrCodeImg && qrUrlText) {
-        const currentUrl = window.location.origin + window.location.pathname;
-        qrCodeImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(currentUrl)}`;
-        qrUrlText.textContent = currentUrl;
-    }
 
     // URL parameter parsing (?room=...)
     const params = new URLSearchParams(window.location.search);

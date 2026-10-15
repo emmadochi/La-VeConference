@@ -173,15 +173,6 @@ async function fetchMeetings() {
         if (quickScheduleHeaderBtn && scheduleModal) {
             quickScheduleHeaderBtn.onclick = () => { scheduleModal.style.display = "flex"; };
         }
-
-        const toggleQrCardBtn = document.getElementById("toggleQrCardBtn");
-        const qrContainer = document.getElementById("qrContainer");
-        if (toggleQrCardBtn && qrContainer) {
-            toggleQrCardBtn.onclick = () => {
-                const isHidden = qrContainer.style.display === "none";
-                qrContainer.style.display = isHidden ? "block" : "none";
-            };
-        }
     } catch (err) {
         console.error("Error fetching meetings:", err);
         meetingList.innerHTML = '<p class="error-text">Failed to load meetings.</p>';
