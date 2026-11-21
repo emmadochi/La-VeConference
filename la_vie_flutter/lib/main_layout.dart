@@ -7,11 +7,17 @@ import 'screens/profile_screen.dart';
 import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'screens/video_room_screen.dart';
+import 'screens/notifications_screen.dart';
+import 'widgets/post_meeting_feedback_sheet.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/notification_service.dart';
+import 'services/lcm_bridge.dart';
+import 'api_service.dart';
+import 'widgets/upcoming_meeting_invite_sheet.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({Key? key}) : super(key: key);
@@ -31,6 +37,13 @@ class _MainLayoutState extends State<MainLayout> {
     super.initState();
     _initFCM();
     _initDeepLinks();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LcmBridge.checkForUpdates(
+        context,
+        packageName: 'org.lifechangerstouch.lavie',
+        currentVersion: '1.0.1',
+      );
+    });
   }
 
   @override
@@ -55,23 +68,71 @@ class _MainLayoutState extends State<MainLayout> {
     });
   }
 
-  void _handleDeepLink(Uri uri) {
-    if (uri.path == '/static/index.html' || uri.path == '/' || uri.path.isEmpty) {
-      final roomId = uri.queryParameters['room'];
-      // final passcode = uri.queryParameters['passcode'];
+  Future<void> _handleDeepLink(Uri uri) async {
+    String? roomId = uri.queryParameters['room'];
 
-      if (roomId != null && roomId.isNotEmpty) {
-        final userName = FirebaseAuth.instance.currentUser?.displayName ?? 'Guest';
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VideoRoomScreen(
-              roomName: roomId,
-              participantName: userName,
-            ),
-          ),
-        );
+    // Also support paths like /meeting/la-vie-123 or /room/la-vie-123 or /join/la-vie-123
+    if (roomId == null || roomId.isEmpty) {
+      final segments = uri.pathSegments;
+      if (segments.length >= 2 && ['meeting', 'room', 'join', 'conf'].contains(segments[0])) {
+        roomId = segments[1];
       }
+    }
+
+    if (roomId != null && roomId.isNotEmpty) {
+      String cleanRoomId = roomId.split('#').first.trim();
+      String? e2eeKey = uri.fragment.isNotEmpty
+          ? uri.fragment.trim()
+          : (roomId.contains('#') ? roomId.split('#').last.trim() : null);
+
+      if (e2eeKey != null && e2eeKey.isNotEmpty) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('e2ee_$cleanRoomId', e2eeKey);
+        } catch (_) {}
+      }
+
+      final info = await ApiService.fetchPublicMeetingInfo(cleanRoomId);
+      if (!mounted) return;
+
+      if (info != null && info['isFutureScheduled'] == true && info['scheduledTimeTs'] != null) {
+        final ts = int.tryParse(info['scheduledTimeTs'].toString()) ?? 0;
+        if (ts > 0) {
+          final schedDt = DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true).toLocal();
+          final existingRem = info['myReminder'] is Map ? (info['myReminder']['reminderMinutes'] as int?) : null;
+          await UpcomingMeetingInviteSheet.show(
+            context,
+            roomId: cleanRoomId,
+            e2eeKey: e2eeKey,
+            title: info['title']?.toString() ?? 'La-Vie Conference',
+            hostName: info['hostName']?.toString() ?? 'La-Vie Host',
+            hostId: info['hostId']?.toString() ?? '',
+            scheduledTime: schedDt,
+            existingReminderMinutes: existingRem,
+          );
+          return;
+        }
+      }
+
+      String fullRoomIdentifier = cleanRoomId;
+      if (e2eeKey != null && e2eeKey.isNotEmpty) {
+        fullRoomIdentifier = '$cleanRoomId#$e2eeKey';
+      }
+
+      final currentUser = FirebaseAuth.instance.currentUser;
+      final userName = currentUser?.displayName ?? 'Guest';
+      final isHost = info != null && currentUser != null && info['hostId'] == currentUser.uid;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VideoRoomScreen(
+            roomName: fullRoomIdentifier,
+            meetingTitle: info?['title']?.toString(),
+            participantName: userName,
+            isHost: isHost,
+          ),
+        ),
+      );
     }
   }
 
@@ -100,17 +161,24 @@ class _MainLayoutState extends State<MainLayout> {
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
           final notif = message.notification;
           if (notif != null) {
+            final action = message.data['action']?.toString() ?? '';
+            final roomId = message.data['roomId']?.toString() ?? '';
+            String? payload;
+            if (action == 'open_room' && roomId.isNotEmpty) {
+              payload = 'open_room:$roomId';
+            } else if (action == 'open_notes') {
+              payload = 'open_notes';
+            }
             NotificationService().showImmediateNotification(
               id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
               title: notif.title ?? 'La-Vie Alert',
               body: notif.body ?? '',
+              payload: payload,
             );
           }
         });
 
-        // Background/Quit push tap routing
-        FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-          final data = message.data;
+        void handleNotificationData(Map<String, dynamic> data) {
           final action = data['action'];
           final roomId = data['roomId'];
           if (action == 'open_room' && roomId != null && roomId.toString().isNotEmpty) {
@@ -124,6 +192,31 @@ class _MainLayoutState extends State<MainLayout> {
                 ),
               ),
             );
+          } else if (action == 'open_notes') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const NotificationsScreen(),
+              ),
+            );
+          } else if (action == 'open_feedback' && roomId != null && roomId.toString().isNotEmpty) {
+            PostMeetingFeedbackSheet.show(
+              context,
+              roomId: roomId.toString(),
+              meetingTitle: data['title'] ?? 'Meeting ${roomId.toString()}',
+            );
+          }
+        }
+
+        // Background/Quit push tap routing
+        FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+          handleNotificationData(message.data);
+        });
+
+        // Terminated state push tap check
+        FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
+          if (message != null) {
+            handleNotificationData(message.data);
           }
         });
       }

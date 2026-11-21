@@ -42,6 +42,7 @@ class PreJoinDialog extends StatefulWidget {
 class _PreJoinDialogState extends State<PreJoinDialog> {
   bool _audioOn = true;
   bool _videoOn = true;
+  bool _requireApproval = false;
   late final TextEditingController _titleController;
 
   @override
@@ -149,6 +150,15 @@ class _PreJoinDialogState extends State<PreJoinDialog> {
                       isOn: _videoOn,
                       onChanged: (val) => setState(() => _videoOn = val),
                     ),
+                    if (widget.isCreating) ...[
+                      const SizedBox(height: 12),
+                      _buildToggleRow(
+                        icon: Icons.admin_panel_settings_outlined,
+                        title: 'Private Waiting Room',
+                        isOn: _requireApproval,
+                        onChanged: (val) => setState(() => _requireApproval = val),
+                      ),
+                    ],
                     const SizedBox(height: 28),
                     
                     // Action Buttons
@@ -174,6 +184,7 @@ class _PreJoinDialogState extends State<PreJoinDialog> {
                               Navigator.pop(context, {
                                 'audio': _audioOn,
                                 'video': _videoOn,
+                                'requireApproval': _requireApproval,
                                 'title': title.isNotEmpty ? title : (widget.defaultMeetingTitle ?? 'Instant Meeting'),
                               });
                             },

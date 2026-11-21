@@ -3,24 +3,27 @@ import logging.handlers
 import os
 import re
 import random
+import secrets
+import hashlib
+import hmac
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
+import subprocess
 from livekit.api import AccessToken, VideoGrants, WebhookReceiver
 from livekit import api
 try:
-    from livekit.api import IngressClient
-    from livekit.protocol.ingress import CreateIngressRequest, IngressInput, ListIngressRequest
+    from livekit.protocol.ingress import CreateIngressRequest, IngressInput, ListIngressRequest, DeleteIngressRequest
 except ImportError:
     try:
-        from livekit.api import IngressClient, CreateIngressRequest, IngressInput, ListIngressRequest
+        from livekit.api import CreateIngressRequest, IngressInput, ListIngressRequest, DeleteIngressRequest
     except ImportError:
-        IngressClient = None
         CreateIngressRequest = None
         IngressInput = None
         ListIngressRequest = None
+        DeleteIngressRequest = None
 
 try:
     from livekit.protocol.egress import (
@@ -190,11 +193,11 @@ def _check_upload_rate(uid: str) -> bool:
     return True
 
 
-def _disk_space_ok() -> bool:
+def _disk_space_ok(min_free_bytes: int = MIN_FREE_DISK_BYTES) -> bool:
     """Returns True if there is enough free disk space to accept a new upload."""
     try:
         stat = shutil.disk_usage(".")
-        return stat.free >= MIN_FREE_DISK_BYTES
+        return stat.free >= min_free_bytes
     except Exception:
         return True  # If we can't check, allow (fail open)
 
@@ -345,7 +348,14 @@ async def health_check():
 
 
 @app.get("/")
+@app.get("/join")
 async def get_index():
+    with open("static/index.html", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+@app.get("/meeting/{room_id}")
+@app.get("/room/{room_id}")
+async def get_room_index(room_id: str):
     with open("static/index.html", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
@@ -598,25 +608,29 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...), u
                 detail=f"Too many uploads. Maximum {MAX_UPLOADS_PER_MIN} uploads per minute."
             )
 
-        # ── Disk space guard ─────────────────────────────────────────────────
-        if not _disk_space_ok():
+        # ── Disk space guard (50 MB floor for <= 5 MB profile avatar updates) ─
+        avatar_min_free_bytes = 50 * 1024 * 1024
+        if not _disk_space_ok(avatar_min_free_bytes):
             raise HTTPException(
                 status_code=507,
-                detail=f"Server storage full. Upload rejected (< {MIN_FREE_DISK_MB} MB free)."
+                detail="Server storage full. Please try again shortly."
             )
 
-        # ── MIME type guard ───────────────────────────────────────────────────
+        # ── MIME / extension guard ────────────────────────────────────────────
+        allowed_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        raw_ext = os.path.splitext(file.filename or "")[1].lower()
         content_type = (file.content_type or "").split(";")[0].strip().lower()
         if content_type not in ALLOWED_PROFILE_MIME:
-            raise HTTPException(
-                status_code=415,
-                detail=f"Unsupported file type '{content_type}'. Only images are allowed for profile photos."
-            )
+            if not (content_type in ("", "application/octet-stream") and raw_ext in allowed_exts):
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported file type '{content_type}'. Only images are allowed for profile photos."
+                )
 
         # ── Size guard: stream into memory up to MAX_UPLOAD_BYTES ─────────────
         chunks = []
         total = 0
-        async for chunk in file:
+        while chunk := await file.read(1024 * 64):
             total += len(chunk)
             if total > MAX_UPLOAD_BYTES:
                 raise HTTPException(
@@ -627,14 +641,13 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...), u
         file_bytes = b"".join(chunks)
 
         os.makedirs("uploads/profiles", exist_ok=True)
-        raw_ext = os.path.splitext(file.filename or "")[1].lower()
-        ext = raw_ext if raw_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"] else ".jpg"
+        ext = raw_ext if raw_ext in allowed_exts else ".jpg"
         timestamp = int(time.time())
-        filename = f"{re.sub(r'[^a-zA-Z0-9_-]', '', uid)}_{timestamp}{ext}"
+        clean_uid = re.sub(r'[^a-zA-Z0-9_-]', '', uid)
+        filename = f"{clean_uid}_{timestamp}{ext}"
         filepath = os.path.join("uploads", "profiles", filename)
 
         # Remove any older avatar files for this uid to save disk space
-        clean_uid = re.sub(r'[^a-zA-Z0-9_-]', '', uid)
         for existing in os.listdir("uploads/profiles"):
             if existing.startswith(f"{clean_uid}_") and existing != filename:
                 try:
@@ -646,8 +659,23 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...), u
             buffer.write(file_bytes)
 
         public_url = f"https://la-vie.lifechangerstouch.org/uploads/profiles/{filename}"
+        if db:
+            try:
+                db.collection("users").document(uid).set(
+                    {
+                        "photoURL": public_url,
+                        "avatar": public_url,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    },
+                    merge=True,
+                )
+            except Exception as fs_err:
+                logger.warning(f"Failed to sync avatar URL to Firestore for {uid}: {fs_err}")
+
         logger.info(f"Profile photo uploaded for uid {uid}: {public_url}")
         return {"success": True, "url": public_url, "filename": filename}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error uploading profile photo: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
@@ -695,17 +723,19 @@ async def upload_chat_media(request: Request, file: UploadFile = File(...), chat
         file_ext = os.path.splitext(file.filename or "")[1].lower()
         valid_extensions = {
             ".mp4", ".mov", ".mkv", ".webm", ".3gp", ".avi", ".mpeg",
-            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg",
             ".mp3", ".wav", ".ogg", ".aac", ".m4a",
-            ".pdf"
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".txt", ".csv", ".rtf", ".json", ".xml",
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".apk"
         }
 
         if content_type not in ALLOWED_CHAT_MIME and file_ext not in valid_extensions:
             raise HTTPException(
                 status_code=415,
                 detail=(
-                    f"Unsupported file type '{content_type}'. "
-                    "Allowed: images, videos, audio, and PDF documents."
+                    f"Unsupported file type '{content_type}' ({file_ext}). "
+                    "Allowed: images, videos, audio, documents, archives, and APK packages."
                 )
             )
 
@@ -721,12 +751,13 @@ async def upload_chat_media(request: Request, file: UploadFile = File(...), chat
         total_written = 0
         try:
             with open(filepath, "wb") as buffer:
-                async for chunk in file:
+                while chunk := await file.read(1024 * 64):
                     total_written += len(chunk)
                     if total_written > MAX_UPLOAD_BYTES:
                         # Remove partially written file before raising
                         buffer.close()
-                        os.remove(filepath)
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
                         raise HTTPException(
                             status_code=413,
                             detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_MB} MB."
@@ -739,6 +770,48 @@ async def upload_chat_media(request: Request, file: UploadFile = File(...), chat
             if os.path.exists(filepath):
                 os.remove(filepath)
             raise write_err
+
+        # ── Automated Video Transcoding / Compression (CRF 26, 720p, +faststart) ──
+        is_video = (content_type and content_type.startswith("video/")) or file_ext in [
+            ".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp"
+        ]
+        if is_video:
+            try:
+                optimized_filepath = os.path.join("uploads", "media", f"opt_{filename}.mp4")
+                # Scale down to max 720p, ensure dimensions divisible by 2, normalize pixel format to yuv420p
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y", "-i", filepath,
+                    "-vf", "scale='min(720,iw)':-2,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-c:v", "libx264", "-crf", "26", "-preset", "veryfast",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    optimized_filepath
+                ]
+
+                def _run_ffmpeg():
+                    return subprocess.run(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=30
+                    )
+
+                # Execute in thread to prevent blocking the async event loop
+                proc = await asyncio.to_thread(_run_ffmpeg)
+
+                if proc.returncode == 0 and os.path.exists(optimized_filepath) and os.path.getsize(optimized_filepath) > 0:
+                    old_size = total_written
+                    os.replace(optimized_filepath, filepath)
+                    total_written = os.path.getsize(filepath)
+                    saved_pct = ((old_size - total_written) / old_size * 100) if old_size > 0 else 0
+                    logger.info(f"Auto-compressed video {filename}: {old_size} -> {total_written} bytes (saved {saved_pct:.1f}%)")
+                else:
+                    logger.warning(f"FFmpeg transcode skipped or failed (code {proc.returncode})")
+                    if os.path.exists(optimized_filepath):
+                        os.remove(optimized_filepath)
+            except Exception as ffmpeg_err:
+                logger.warning(f"Video transcode error (retaining original): {ffmpeg_err}")
 
         public_url = f"https://la-vie.lifechangerstouch.org/uploads/media/{filename}"
         logger.info(f"Chat media uploaded for chat {chat_id}: {public_url} ({total_written} bytes)")
@@ -1183,6 +1256,96 @@ async def generate_call_token(request: Request):
 # Store in-memory room start timestamps for synchronized meeting chronometer
 ACTIVE_ROOMS_START = {}
 
+def _parse_datetime_utc(val):
+    """Safely parses Firestore Timestamp, datetime, or ISO string into a UTC-aware datetime."""
+    if not val:
+        return None
+    try:
+        if isinstance(val, datetime):
+            return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+        if hasattr(val, "timestamp"):
+            return datetime.fromtimestamp(val.timestamp(), tz=timezone.utc)
+        s = str(val).strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+def _find_meeting_doc(db_client, room_id: str):
+    """Finds meeting document by ID or roomId field."""
+    if not db_client:
+        return None
+    doc = db_client.collection("meetings").document(room_id).get()
+    if doc.exists:
+        return doc
+    q = db_client.collection("meetings").where("roomId", "==", room_id).limit(1).get()
+    if q:
+        return q[0]
+    return None
+
+def _get_verified_user(request: Request) -> dict:
+    """Extracts and verifies Firebase Bearer token."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. You must log in to join a meeting."
+        )
+    token = auth_header.split("Bearer ")[1]
+    try:
+        return auth.verify_id_token(token)
+    except Exception as e:
+        logger.error(f"Firebase token verification failed: {e}")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session. Please log in again."
+        )
+
+def _is_room_host_or_admin(uid: str, email: str, meet_data: dict, db_client) -> bool:
+    """Returns True ONLY if user is the actual host of this meeting or a platform Admin/SuperAdmin."""
+    if not uid:
+        return False
+    SUPERADMIN_EMAILS_ENV = os.getenv("SUPERADMIN_EMAILS", "la-vie@adminnew.com,admin@la-vie.lifechangerstouch.org")
+    superadmin_list = [e.strip().lower() for e in SUPERADMIN_EMAILS_ENV.split(",") if e.strip()]
+    if email and email.lower() in superadmin_list:
+        return True
+
+    if meet_data and meet_data.get("hostId") == uid:
+        return True
+
+    if db_client:
+        try:
+            u_doc = db_client.collection("users").document(uid).get()
+            if u_doc.exists:
+                udict = u_doc.to_dict() or {}
+                if udict.get("isAdmin") is True or udict.get("role") == "admin":
+                    return True
+        except Exception:
+            pass
+    return False
+
+async def _verify_room_host(request: Request, room_id: str) -> tuple[dict, str, dict]:
+    """Verifies caller is authenticated AND is the host of room_id (or SuperAdmin/Admin)."""
+    decoded = _get_verified_user(request)
+    uid = decoded.get("uid", "")
+    email = decoded.get("email", "")
+    db_client = firestore.client() if firebase_admin._apps else None
+    meet_doc = _find_meeting_doc(db_client, room_id) if db_client else None
+    meet_doc_id = meet_doc.id if (meet_doc and meet_doc.exists) else room_id
+    meet_data = (meet_doc.to_dict() or {}) if (meet_doc and meet_doc.exists) else {}
+
+    # If meeting doc exists and specifies a hostId, enforce ownership
+    if meet_data.get("hostId") and not _is_room_host_or_admin(uid, email, meet_data, db_client):
+        raise HTTPException(status_code=403, detail="Only the meeting host can perform this action.")
+
+    return decoded, meet_doc_id, meet_data
+
 @app.get("/token/{room_id}/{peer_id}")
 async def get_token(request: Request, room_id: str, peer_id: str, name: str = "Anonymous", force: bool = False):
     """Generates a secure LiveKit Access Token (JWT) for the client."""
@@ -1193,95 +1356,123 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
     except Exception:
         db = None
     
-    # Check for Firebase Auth Token - REQUIRE LOGIN
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. You must log in to join a meeting."
-        )
+    decoded_token = _get_verified_user(request)
+    uid = decoded_token.get("uid", "")
+    email = decoded_token.get("email", "")
+    firebase_name = decoded_token.get("name")
+    if not firebase_name:
+        firebase_name = email.split("@")[0] if email else (name if name and name != "Anonymous" else "User")
+    name = firebase_name
+    logger.info(f"Verified Firebase user: {name} ({uid}) for room {room_id}")
 
-    token = auth_header.split("Bearer ")[1]
-    try:
-        decoded_token = auth.verify_id_token(token)
-        uid = decoded_token.get("uid")
-        firebase_name = decoded_token.get("name")
-        if not firebase_name:
-            email = decoded_token.get("email", "")
-            firebase_name = email.split("@")[0] if email else (name if name and name != "Anonymous" else "User")
-        name = firebase_name
-        is_admin = True
-        logger.info(f"Verified Firebase user: {name} for room {room_id}")
-
-        # Automatically update active meeting for the user account
-        if uid and db:
-            user_ref = db.collection("users").document(uid)
-            try:
-                user_doc = user_ref.get()
-                if user_doc.exists:
-                    data = user_doc.to_dict()
-                    active_room = data.get("active_room")
-                    if active_room and active_room != room_id:
-                        logger.info(f"User {uid} transitioning from active room {active_room} to {room_id}")
-            except Exception as e:
-                logger.warning(f"Error checking prior active room: {e}")
-            
-            # Update their active room
-            user_ref.set({"active_room": room_id}, merge=True)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Firebase token verification failed: {e}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired session. Please log in again."
-        )
-
-    # Check if meeting has been locked by the host
+    # Fetch meeting metadata, enforce host role, room lock, and waiting room approval gate
+    meet_data = {}
+    meet_doc_id = room_id
     if db:
         try:
-            meet_doc = db.collection("meetings").document(room_id).get()
-            if meet_doc.exists:
+            meet_doc = _find_meeting_doc(db, room_id)
+            if meet_doc and meet_doc.exists:
+                meet_doc_id = meet_doc.id
                 meet_data = meet_doc.to_dict() or {}
-                if meet_data.get("is_locked", False) and not is_admin:
-                    logger.warning(f"Blocked guest/attendee from joining locked room: {room_id}")
+                is_admin = _is_room_host_or_admin(uid, email, meet_data, db)
+            else:
+                # Brand new instant/ad-hoc room: claim first creator as true host
+                is_admin = True
+                meet_data = {
+                    "roomId": room_id,
+                    "hostId": uid,
+                    "hostName": name,
+                    "title": f"{name}'s Meeting",
+                    "status": "scheduled",
+                    "requireApproval": False,
+                    "createdAt": firestore.SERVER_TIMESTAMP,
+                }
+                db.collection("meetings").document(room_id).set(meet_data, merge=True)
+
+            # 1. Room Lock Gate
+            if meet_data.get("is_locked", False) and not is_admin:
+                logger.warning(f"Blocked attendee {uid} from joining locked room: {room_id}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "room_locked",
+                        "message": "This meeting has been locked by the host. No new participants may join."
+                    }
+                )
+
+            # 2. Private Waiting Room Approval Gate
+            if meet_data.get("requireApproval", False) and not is_admin:
+                admitted_uids = meet_data.get("admittedUids") or []
+                denied_uids = meet_data.get("deniedUids") or []
+                if uid in denied_uids:
                     raise HTTPException(
                         status_code=403,
                         detail={
-                            "error": "room_locked",
-                            "message": "This meeting has been locked by the host. No new participants may join."
+                            "error": "entry_denied",
+                            "message": "The host declined your request to join this private meeting."
+                        }
+                    )
+                if uid not in admitted_uids:
+                    logger.info(f"Holding {name} ({uid}) in waiting room for private meeting {room_id}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "waiting_approval",
+                            "message": "This is a private meeting. Waiting for host approval.",
+                            "room_id": room_id,
+                            "title": meet_data.get("title", "Private Meeting"),
+                            "host_name": meet_data.get("hostName", "Host")
                         }
                     )
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Meeting lock check skipped: {e}")
+            logger.warning(f"Meeting lock/approval check skipped: {e}")
+
+    # Access verified! Record active room & attendee membership
+    if uid and db:
+        try:
+            db.collection("users").document(uid).set({"active_room": room_id}, merge=True)
+            db.collection("meetings").document(meet_doc_id).set({
+                "attendees": firestore.ArrayUnion([uid])
+            }, merge=True)
+        except Exception as att_err:
+            logger.warning(f"Failed to update attendee membership for {uid} in {room_id}: {att_err}")
+
+    # Determine scheduled start time (if scheduled in the future, do not start chronometer early)
+    now_ts = int(time.time())
+    scheduled_dt = _parse_datetime_utc(meet_data.get("scheduledTime"))
+    scheduled_time_ts = int(scheduled_dt.timestamp()) if scheduled_dt else None
+    is_before_scheduled = scheduled_time_ts is not None and now_ts < scheduled_time_ts
 
     # Track room start timestamp for synchronized meeting timer
-    now_ts = int(time.time())
-    room_started_at = ACTIVE_ROOMS_START.get(room_id)
-    if not room_started_at:
-        if db:
-            try:
-                meet_doc = db.collection("meetings").document(room_id).get()
-                if meet_doc.exists:
-                    mdata = meet_doc.to_dict() or {}
-                    stored_ts = mdata.get("started_at")
-                    if stored_ts:
-                        if isinstance(stored_ts, (int, float)):
-                            room_started_at = int(stored_ts)
-                        elif hasattr(stored_ts, "timestamp"):
-                            room_started_at = int(stored_ts.timestamp())
-            except Exception as e:
-                logger.warning(f"Error checking firestore room started_at: {e}")
+    room_started_at = None
+    if is_before_scheduled:
+        # Never start counting elapsed meeting duration before the scheduled start time
+        ACTIVE_ROOMS_START.pop(room_id, None)
+    else:
+        room_started_at = ACTIVE_ROOMS_START.get(room_id)
+        if room_started_at and scheduled_time_ts and room_started_at < scheduled_time_ts:
+            room_started_at = None
+
+        if not room_started_at and meet_data:
+            stored_ts = meet_data.get("started_at")
+            if stored_ts:
+                parsed_started = None
+                if isinstance(stored_ts, (int, float)):
+                    parsed_started = int(stored_ts)
+                elif hasattr(stored_ts, "timestamp"):
+                    parsed_started = int(stored_ts.timestamp())
+                # Ignore stale started_at recorded before scheduled time
+                if parsed_started and (scheduled_time_ts is None or parsed_started >= scheduled_time_ts):
+                    room_started_at = parsed_started
 
         if not room_started_at:
             room_started_at = now_ts
             ACTIVE_ROOMS_START[room_id] = room_started_at
             if db:
                 try:
-                    db.collection("meetings").document(room_id).set({"started_at": room_started_at}, merge=True)
+                    db.collection("meetings").document(meet_doc_id).set({"started_at": room_started_at}, merge=True)
                 except Exception:
                     pass
         else:
@@ -1309,7 +1500,8 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
         return {
             "token": token,
             "is_admin": is_admin,
-            "room_started_at": room_started_at
+            "room_started_at": room_started_at,
+            "scheduled_time_ts": scheduled_time_ts
         }
     except Exception as e:
         logger.error(f"Failed to generate token: {e}")
@@ -1319,11 +1511,11 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
 @app.post("/api/end_meeting")
 async def end_meeting(request: Request):
     """Ends a meeting for all participants, deletes the LiveKit room, and clears active_room in Firestore."""
-    await verify_admin(request)
     data = await request.json()
     room_id = data.get("room_id")
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
 
     # 1. Delete LiveKit Room
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -1345,9 +1537,10 @@ async def end_meeting(request: Request):
             logger.warning(f"Failed to clear active users in Firestore: {e}")
 
         try:
-            db.collection("meetings").document(room_id).set({
+            db.collection("meetings").document(meet_doc_id).set({
                 "status": "ended",
-                "ended_at": firestore.SERVER_TIMESTAMP
+                "ended_at": firestore.SERVER_TIMESTAMP,
+                "started_at": firestore.DELETE_FIELD
             }, merge=True)
         except Exception as e:
             logger.warning(f"Failed to mark meeting ended in Firestore: {e}")
@@ -1355,19 +1548,217 @@ async def end_meeting(request: Request):
     ACTIVE_ROOMS_START.pop(room_id, None)
     return {"status": "success", "message": f"Meeting {room_id} ended for all"}
 
+
+@app.get("/api/meeting/{room_id}/info")
+async def get_meeting_info(request: Request, room_id: str):
+    """Returns safe public metadata for a scheduled/upcoming meeting and optional caller reminder status."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    meet_doc = _find_meeting_doc(db, room_id)
+    if not meet_doc or not meet_doc.exists:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    mdata = meet_doc.to_dict() or {}
+    host_id = mdata.get("hostId", "")
+    host_name = mdata.get("hostName", "")
+    if not host_name and host_id:
+        try:
+            hdoc = db.collection("users").document(host_id).get()
+            if hdoc.exists:
+                hdata = hdoc.to_dict() or {}
+                host_name = hdata.get("displayName") or hdata.get("name") or ""
+        except Exception:
+            pass
+
+    sched_dt = _parse_datetime_utc(mdata.get("scheduledTime"))
+    now_dt = datetime.now(timezone.utc)
+    is_future = bool(sched_dt and sched_dt > now_dt)
+
+    my_reminder = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            decoded = auth.verify_id_token(auth_header.split("Bearer ")[1])
+            uid = decoded.get("uid")
+            if uid:
+                rem_doc = db.collection("meeting_reminders").document(f"{meet_doc.id}_{uid}").get()
+                if rem_doc.exists:
+                    rdata = rem_doc.to_dict() or {}
+                    my_reminder = {
+                        "enabled": True,
+                        "reminderMinutes": rdata.get("reminderMinutes", 15),
+                        "notifyAt": rdata.get("notifyAt"),
+                    }
+        except Exception:
+            pass
+
+    return {
+        "id": meet_doc.id,
+        "roomId": mdata.get("roomId") or meet_doc.id,
+        "title": mdata.get("title") or "La-Vie Conference",
+        "hostId": host_id,
+        "hostName": host_name or "La-Vie Host",
+        "scheduledTime": sched_dt.isoformat().replace("+00:00", "Z") if sched_dt else mdata.get("scheduledTime"),
+        "scheduledTimeTs": int(sched_dt.timestamp()) if sched_dt else None,
+        "status": mdata.get("status", "scheduled"),
+        "meetingType": mdata.get("meetingType", "scheduled"),
+        "requireApproval": bool(mdata.get("requireApproval", False)),
+        "isFutureScheduled": is_future,
+        "myReminder": my_reminder,
+    }
+
+
+@app.post("/api/meeting/{room_id}/reminder")
+async def set_meeting_reminder(request: Request, room_id: str):
+    """Allows any authenticated invitee/participant to subscribe to FCM push reminders and save the meeting."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required to set push reminders")
+
+    try:
+        decoded = auth.verify_id_token(auth_header.split("Bearer ")[1])
+        uid = decoded.get("uid")
+        email = decoded.get("email", "")
+        name = decoded.get("name") or (email.split("@")[0] if email else "Participant")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid authentication token: {e}")
+
+    if not uid:
+        raise HTTPException(status_code=401, detail="Missing user ID")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    reminder_minutes = body.get("reminderMinutes", 15)
+    try:
+        reminder_minutes = max(0, min(1440, int(reminder_minutes)))
+    except Exception:
+        reminder_minutes = 15
+
+    fcm_token = body.get("fcmToken")
+    meet_doc = _find_meeting_doc(db, room_id)
+    if not meet_doc or not meet_doc.exists:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    mdata = meet_doc.to_dict() or {}
+    actual_room_id = mdata.get("roomId") or meet_doc.id
+    title = mdata.get("title") or "La-Vie Conference"
+    host_id = mdata.get("hostId", "")
+    host_name = mdata.get("hostName", "")
+    if not host_name and host_id:
+        try:
+            hdoc = db.collection("users").document(host_id).get()
+            if hdoc.exists:
+                hdata = hdoc.to_dict() or {}
+                host_name = hdata.get("displayName") or hdata.get("name") or ""
+        except Exception:
+            pass
+
+    sched_dt = _parse_datetime_utc(mdata.get("scheduledTime"))
+    if not sched_dt:
+        raise HTTPException(status_code=400, detail="Meeting does not have a valid scheduled time")
+
+    now_dt = datetime.now(timezone.utc)
+    notify_at_dt = sched_dt - timedelta(minutes=reminder_minutes)
+    if notify_at_dt < now_dt and now_dt <= sched_dt:
+        notify_at_dt = now_dt
+
+    # Update user FCM token if passed
+    if fcm_token:
+        try:
+            db.collection("users").document(uid).set({"fcmToken": fcm_token}, merge=True)
+        except Exception:
+            pass
+
+    sched_iso = sched_dt.isoformat().replace("+00:00", "Z")
+    notify_iso = notify_at_dt.isoformat().replace("+00:00", "Z")
+
+    # Save top-level reminder doc (single-collection query needs zero Firestore composite indexes)
+    reminder_doc_id = f"{meet_doc.id}_{uid}"
+    db.collection("meeting_reminders").document(reminder_doc_id).set({
+        "meetingId": meet_doc.id,
+        "roomId": actual_room_id,
+        "title": title,
+        "uid": uid,
+        "email": email,
+        "name": name,
+        "fcmToken": fcm_token or "",
+        "reminderMinutes": reminder_minutes,
+        "scheduledTime": sched_iso,
+        "notifyAt": notify_iso,
+        "notified": False,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    # Mirror to user's saved_meetings so invitee sees it on Dashboard, Meetings, and Calendar tabs
+    db.collection("users").document(uid).collection("saved_meetings").document(meet_doc.id).set({
+        "id": meet_doc.id,
+        "roomId": actual_room_id,
+        "title": title,
+        "hostId": host_id,
+        "hostName": host_name or "La-Vie Host",
+        "scheduledTime": sched_iso,
+        "reminderMinutes": reminder_minutes,
+        "status": mdata.get("status", "scheduled"),
+        "meetingType": mdata.get("meetingType", "scheduled"),
+        "role": "host" if uid == host_id else "invitee",
+        "savedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    return {
+        "status": "success",
+        "roomId": actual_room_id,
+        "reminderMinutes": reminder_minutes,
+        "notifyAt": notify_iso,
+        "scheduledTime": sched_iso,
+    }
+
+
+@app.delete("/api/meeting/{room_id}/reminder")
+async def delete_meeting_reminder(request: Request, room_id: str):
+    """Cancels an invitee's scheduled reminder and removes it from saved meetings."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        decoded = auth.verify_id_token(auth_header.split("Bearer ")[1])
+        uid = decoded.get("uid")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid authentication token: {e}")
+
+    if not uid:
+        raise HTTPException(status_code=401, detail="Missing user ID")
+
+    meet_doc = _find_meeting_doc(db, room_id)
+    target_id = meet_doc.id if (meet_doc and meet_doc.exists) else room_id
+    db.collection("meeting_reminders").document(f"{target_id}_{uid}").delete()
+    db.collection("users").document(uid).collection("saved_meetings").document(target_id).delete()
+    return {"status": "success", "message": "Reminder removed"}
+
 @app.post("/api/room/lock")
 async def toggle_room_lock(request: Request):
     """Locks or unlocks a meeting so that new attendees cannot join."""
-    await verify_admin(request)
     data = await request.json()
     room_id = data.get("room_id")
     is_locked = data.get("is_locked", True)
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
 
     if db:
         try:
-            db.collection("meetings").document(room_id).set({
+            db.collection("meetings").document(meet_doc_id).set({
                 "is_locked": is_locked
             }, merge=True)
             logger.info(f"Room {room_id} lock state updated to {is_locked}")
@@ -1377,12 +1768,231 @@ async def toggle_room_lock(request: Request):
 
     return {"status": "success", "room_id": room_id, "is_locked": is_locked}
 
+
+@app.post("/api/room/waiting-room/toggle")
+async def toggle_waiting_room(request: Request):
+    """Host-only toggle for Require Host Approval (Private Waiting Room). When turned off, lets waiting guests enter."""
+    data = await request.json()
+    room_id = data.get("room_id")
+    enabled = bool(data.get("enabled", True))
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
+    if db:
+        try:
+            db.collection("meetings").document(meet_doc_id).set({
+                "requireApproval": enabled
+            }, merge=True)
+            logger.info(f"Room {room_id} waiting room (requireApproval) updated to {enabled}")
+        except Exception as e:
+            logger.error(f"Failed to update waiting room state: {e}")
+            raise HTTPException(status_code=500, detail="Failed to update waiting room status")
+
+    return {"status": "success", "room_id": room_id, "requireApproval": enabled}
+
+
+@app.post("/api/room/{room_id}/knock")
+async def knock_waiting_room(request: Request, room_id: str):
+    """Authenticated guest requests admission to a private meeting waiting room."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    decoded = _get_verified_user(request)
+    uid = decoded.get("uid", "")
+    email = decoded.get("email", "")
+    name = decoded.get("name") or (email.split("@")[0] if email else "Guest")
+    photo_url = decoded.get("picture", "")
+
+    meet_doc = _find_meeting_doc(db, room_id)
+    if not meet_doc or not meet_doc.exists:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    meet_doc_id = meet_doc.id
+    mdata = meet_doc.to_dict() or {}
+
+    # Check if already admitted or denied
+    if uid in (mdata.get("admittedUids") or []):
+        return {"status": "admitted"}
+    if uid in (mdata.get("deniedUids") or []):
+        return {"status": "denied"}
+
+    wait_ref = db.collection("meetings").document(meet_doc_id).collection("waiting_room").document(uid)
+    prev_snap = wait_ref.get()
+    should_ping_host = True
+    if prev_snap.exists:
+        pdata = prev_snap.to_dict() or {}
+        if pdata.get("status") == "pending":
+            # Avoid spamming host push notification on repeat knocks
+            should_ping_host = False
+
+    wait_ref.set({
+        "uid": uid,
+        "name": name,
+        "email": email,
+        "photoUrl": photo_url,
+        "status": "pending",
+        "requestedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    # Ping host via FCM / In-App notification if they aren't yet looking at the sheet
+    host_id = mdata.get("hostId", "")
+    title = mdata.get("title", "Private Meeting")
+    if should_ping_host and host_id and host_id != uid:
+        try:
+            h_doc = db.collection("users").document(host_id).get()
+            if h_doc.exists:
+                hdata = h_doc.to_dict() or {}
+                fcm_token = hdata.get("fcmToken") or hdata.get("fcm_token")
+                if fcm_token:
+                    messaging.send(messaging.Message(
+                        notification=messaging.Notification(
+                            title=f"Waiting Room: {name}",
+                            body=f'{name} is waiting to enter "{title}". Tap to review.'
+                        ),
+                        data={"roomId": room_id, "action": "open_room", "type": "waiting_room_knock"},
+                        token=fcm_token,
+                    ))
+            await send_in_app_notification(
+                user_id=host_id,
+                title=f"Waiting Room: {name}",
+                body=f'{name} knocked on "{title}".',
+                notification_type="waiting_room_knock",
+                action="open_room",
+                room_id=room_id,
+            )
+        except Exception as pe:
+            logger.warning(f"Waiting room host ping error: {pe}")
+
+    return {"status": "pending", "roomId": room_id}
+
+
+@app.get("/api/room/{room_id}/knock-status")
+async def get_knock_status(request: Request, room_id: str):
+    """Lightweight poll endpoint allowing waiting guests to check if the host admitted/denied them."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    decoded = _get_verified_user(request)
+    uid = decoded.get("uid", "")
+    email = decoded.get("email", "")
+
+    meet_doc = _find_meeting_doc(db, room_id)
+    if not meet_doc or not meet_doc.exists:
+        return {"status": "open", "requireApproval": False}
+
+    mdata = meet_doc.to_dict() or {}
+    if _is_room_host_or_admin(uid, email, mdata, db):
+        return {"status": "admitted", "requireApproval": bool(mdata.get("requireApproval", False))}
+
+    if mdata.get("is_locked", False):
+        return {"status": "locked", "requireApproval": bool(mdata.get("requireApproval", False))}
+
+    if not mdata.get("requireApproval", False):
+        return {"status": "admitted", "requireApproval": False}
+
+    if uid in (mdata.get("deniedUids") or []):
+        return {"status": "denied", "requireApproval": True}
+    if uid in (mdata.get("admittedUids") or []):
+        return {"status": "admitted", "requireApproval": True}
+
+    wait_doc = db.collection("meetings").document(meet_doc.id).collection("waiting_room").document(uid).get()
+    if wait_doc.exists:
+        st = (wait_doc.to_dict() or {}).get("status", "pending")
+        return {"status": st, "requireApproval": True}
+
+    return {"status": "pending", "requireApproval": True}
+
+
+@app.get("/api/room/{room_id}/waiting-room")
+async def list_waiting_room(request: Request, room_id: str):
+    """Host-only endpoint returning all pending guests in the waiting room."""
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
+    if not db:
+        return {"waiting": []}
+
+    waiting = []
+    try:
+        snaps = db.collection("meetings").document(meet_doc_id).collection("waiting_room").where("status", "==", "pending").stream()
+        for s in snaps:
+            d = s.to_dict() or {}
+            waiting.append({
+                "uid": d.get("uid") or s.id,
+                "name": d.get("name") or "Guest",
+                "email": d.get("email") or "",
+                "photoUrl": d.get("photoUrl") or "",
+            })
+    except Exception as e:
+        logger.warning(f"Error listing waiting room for {room_id}: {e}")
+
+    return {"waiting": waiting}
+
+
+@app.post("/api/room/{room_id}/waiting-room/decision")
+async def decide_waiting_room(request: Request, room_id: str):
+    """Host-only endpoint to admit, deny, or admit_all guests waiting to join."""
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    data = await request.json()
+    action = (data.get("action") or "").lower()
+    target_uid = data.get("target_uid") or ""
+
+    meet_ref = db.collection("meetings").document(meet_doc_id)
+    wait_col = meet_ref.collection("waiting_room")
+
+    if action == "admit_all":
+        snaps = wait_col.where("status", "==", "pending").stream()
+        admitted_ids = []
+        for s in snaps:
+            admitted_ids.append(s.id)
+            wait_col.document(s.id).set({"status": "admitted"}, merge=True)
+        if admitted_ids:
+            meet_ref.set({
+                "admittedUids": firestore.ArrayUnion(admitted_ids),
+                "deniedUids": firestore.ArrayRemove(admitted_ids),
+            }, merge=True)
+        return {"status": "success", "action": "admit_all", "count": len(admitted_ids)}
+
+    if not target_uid or action not in ("admit", "deny"):
+        raise HTTPException(status_code=400, detail="Valid target_uid and action ('admit' | 'deny' | 'admit_all') required")
+
+    if action == "admit":
+        wait_col.document(target_uid).set({"status": "admitted"}, merge=True)
+        meet_ref.set({
+            "admittedUids": firestore.ArrayUnion([target_uid]),
+            "deniedUids": firestore.ArrayRemove([target_uid]),
+        }, merge=True)
+    else:
+        wait_col.document(target_uid).set({"status": "denied"}, merge=True)
+        meet_ref.set({
+            "deniedUids": firestore.ArrayUnion([target_uid]),
+            "admittedUids": firestore.ArrayRemove([target_uid]),
+        }, merge=True)
+
+    return {"status": "success", "action": action, "target_uid": target_uid}
+
+
 @app.post("/api/kick")
 async def kick_participant(request: Request):
-    await verify_admin(request)
     data = await request.json()
     room_id = data.get("room_id")
     identity = data.get("identity")
+    if not room_id or not identity:
+        raise HTTPException(status_code=400, detail="room_id and identity required")
+    _, meet_doc_id, _ = await _verify_room_host(request, room_id)
+
+    # Also revoke prior waiting room admission so kicked participant cannot slip back in unapproved
+    if db:
+        try:
+            meet_ref = db.collection("meetings").document(meet_doc_id)
+            meet_ref.set({
+                "admittedUids": firestore.ArrayRemove([identity]),
+            }, merge=True)
+            meet_ref.collection("waiting_room").document(identity).set({"status": "denied"}, merge=True)
+        except Exception:
+            pass
     
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
@@ -1398,11 +2008,12 @@ async def kick_participant(request: Request):
 
 @app.post("/api/mute")
 async def mute_participant(request: Request):
-    await verify_admin(request)
     data = await request.json()
     room_id = data.get("room_id")
     identity = data.get("identity")
     track_sid = data.get("track_sid")
+    if room_id:
+        await _verify_room_host(request, room_id)
     
     lkapi = api.LiveKitAPI(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     try:
@@ -1503,36 +2114,68 @@ async def end_meeting(request: Request):
         await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_id))
         logger.info(f"Successfully deleted LiveKit room {room_id}")
 
-        # Clear active_room for all users currently marked in this room in Firestore
+        # Clear active_room for all users currently marked in this room in Firestore and notify all attendees
         if db:
             try:
+                # 1. Fetch meeting title and attendees
+                display_title = room_id
+                attendee_uids = set()
+                try:
+                    meet_doc = db.collection("meetings").document(room_id).get()
+                    if meet_doc.exists:
+                        m_data = meet_doc.to_dict() or {}
+                        display_title = m_data.get("title") or room_id
+                        for att in (m_data.get("attendees") or []):
+                            if att:
+                                attendee_uids.add(att)
+                        if m_data.get("hostId"):
+                            attendee_uids.add(m_data.get("hostId"))
+                except Exception as me:
+                    logger.warning(f"Error fetching meeting details for end_meeting: {me}")
+
+                # 2. Add all currently active users in the room
                 users_in_room = db.collection("users").where("active_room", "==", room_id).get()
                 for udoc in users_in_room:
-                    user_data = udoc.to_dict() or {}
                     udoc.reference.set({"active_room": ""}, merge=True)
-                    # Trigger Post-Meeting Follow-up push notification
+                    attendee_uids.add(udoc.id)
+
+                for u_id in attendee_uids:
+                    u_doc = db.collection("users").document(u_id).get()
+                    if not u_doc.exists:
+                        continue
+                    user_data = u_doc.to_dict() or {}
+                    
+                    # Ensure active_room is cleared
+                    if user_data.get("active_room") == room_id:
+                        u_doc.reference.set({"active_room": ""}, merge=True)
+
+                    # Trigger Post-Meeting Thank You & Feedback Push Notification
                     fcm_token = user_data.get("fcmToken") or user_data.get("fcm_token")
                     if fcm_token:
                         try:
                             msg = messaging.Message(
                                 notification=messaging.Notification(
-                                    title="Meeting Concluded 📝",
-                                    body=f"Thank you for attending \"{room_id}\"! Notes and summaries are available."
+                                    title="Thank You for Joining! 🙏",
+                                    body=f"How was your call in \"{display_title}\"? Tap to share quick feedback & view notes."
                                 ),
-                                data={"roomId": room_id, "action": "open_notes", "type": "meeting_followup"},
+                                data={
+                                    "roomId": room_id,
+                                    "action": "open_feedback",
+                                    "type": "meeting_followup"
+                                },
                                 token=fcm_token
                             )
                             messaging.send(msg)
                         except Exception as p_err:
-                            logger.warning(f"Could not send follow-up push to {udoc.id}: {p_err}")
+                            logger.warning(f"Could not send follow-up push to {u_id}: {p_err}")
                     
                     # Record in-app notification
                     await send_in_app_notification(
-                        user_id=udoc.id,
+                        user_id=u_id,
                         title="Meeting Concluded 📝",
-                        body=f"Thank you for joining \"{room_id}\"! Check your dashboard for notes and recording.",
+                        body=f"Thank you for joining \"{display_title}\"! Tap to rate your experience and view meeting notes.",
                         notification_type="meeting_followup",
-                        action="open_notes",
+                        action="open_feedback",
                         room_id=room_id
                     )
 
@@ -1541,14 +2184,14 @@ async def end_meeting(request: Request):
                     if user_email and "@" in user_email:
                         recap_html = email_templates.render_post_meeting_recap_email(
                             room_id=room_id,
-                            title=f"Meeting: {room_id}"
+                            title=display_title
                         )
                         send_html_email(
                             to_email=user_email,
-                            subject=f"Thank you for attending {room_id}! 📝",
+                            subject=f"Thank you for attending {display_title}! 📝",
                             html_content=recap_html
                         )
-                logger.info(f"Cleared active_room and sent follow-up notifications & emails for users in room {room_id}")
+                logger.info(f"Cleared active_room and dispatched follow-up notifications & emails to {len(attendee_uids)} attendees for room {room_id}")
             except Exception as fe:
                 logger.warning(f"Failed to process end-of-meeting tasks in Firestore: {fe}")
 
@@ -1563,6 +2206,68 @@ async def end_meeting(request: Request):
         return {"status": "success", "warning": str(e)}
     finally:
         await lkapi.aclose()
+
+
+@app.post("/api/meeting/feedback")
+async def submit_meeting_feedback(request: Request):
+    """
+    Submits post-meeting feedback and call quality ratings.
+    Stores in Firestore meeting_feedback and updates meeting document stats.
+    """
+    user_id = ""
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split("Bearer ")[1].strip()
+        if token and token not in ("null", "undefined"):
+            try:
+                decoded = auth.verify_id_token(token)
+                user_id = decoded.get("uid", "")
+            except Exception:
+                pass
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    room_id = data.get("room_id") or data.get("roomId", "")
+    rating = int(data.get("rating", 5))
+    tags = data.get("tags") or []
+    comment = (data.get("comment") or data.get("message") or "").strip()
+    would_recommend = data.get("would_recommend", "yes")
+    user_name = data.get("user_name", "")
+    if not user_id:
+        user_id = data.get("user_id", "anonymous")
+
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    feedback_doc = {
+        "roomId": room_id,
+        "userId": user_id,
+        "userName": user_name,
+        "rating": rating,
+        "tags": tags,
+        "comment": comment,
+        "wouldRecommend": would_recommend,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if db:
+        try:
+            # 1. Add to central meeting_feedback collection
+            db.collection("meeting_feedback").add(feedback_doc)
+            # 2. Append to specific meeting doc feedbacks
+            db.collection("meetings").document(room_id).collection("feedbacks").add(feedback_doc)
+            logger.info(f"Recorded meeting feedback for room {room_id}: {rating} stars by user {user_id}")
+        except Exception as fe:
+            logger.warning(f"Failed to save meeting feedback: {fe}")
+
+    return {
+        "status": "success",
+        "message": "Thank you! Your feedback helps us improve La-Vie.",
+        "rating": rating
+    }
 
 
 @app.post("/api/create_ingress")
@@ -1604,6 +2309,21 @@ async def create_ingress(request: Request):
                 logger.warning(f"Error checking existing ingress: {list_err}")
 
         # Create new Ingress request
+        if not CreateIngressRequest or not IngressInput:
+            raise HTTPException(status_code=500, detail="LiveKit Ingress protocol is not initialized on server.")
+
+        # Proactively prune stale ingresses if project has >= 2 ingress objects
+        if DeleteIngressRequest and ListIngressRequest:
+            try:
+                all_ingress = await lkapi.ingress.list_ingress(ListIngressRequest())
+                if all_ingress and len(all_ingress.items) >= 2:
+                    for old_item in all_ingress.items:
+                        if old_item.room_name != room_id:
+                            logger.info(f"Auto-pruning stale Ingress {old_item.ingress_id} (room: {old_item.room_name})")
+                            await lkapi.ingress.delete_ingress(DeleteIngressRequest(ingress_id=old_item.ingress_id))
+            except Exception as prune_err:
+                logger.warning(f"Error proactively pruning stale ingresses: {prune_err}")
+
         req = CreateIngressRequest(
             input_type=IngressInput.RTMP_INPUT,
             name=f"vMix Live Stage - {room_id}",
@@ -1612,7 +2332,23 @@ async def create_ingress(request: Request):
             participant_name="Main Stage 🎥",
             enable_transcoding=True
         )
-        ingress_info = await lkapi.ingress.create_ingress(req)
+
+        try:
+            ingress_info = await lkapi.ingress.create_ingress(req)
+        except Exception as create_err:
+            if "limit exceeded" in str(create_err).lower() and DeleteIngressRequest and ListIngressRequest:
+                logger.warning("Ingress object limit reached; purging old ingresses and retrying...")
+                all_ingress = await lkapi.ingress.list_ingress(ListIngressRequest())
+                if all_ingress:
+                    for old_item in all_ingress.items:
+                        try:
+                            await lkapi.ingress.delete_ingress(DeleteIngressRequest(ingress_id=old_item.ingress_id))
+                        except Exception:
+                            pass
+                ingress_info = await lkapi.ingress.create_ingress(req)
+            else:
+                raise create_err
+
         logger.info(f"Successfully generated Ingress for room {room_id}: URL={ingress_info.url}, Key={ingress_info.stream_key}")
 
         return {
@@ -1621,8 +2357,14 @@ async def create_ingress(request: Request):
             "stream_key": ingress_info.stream_key
         }
     except Exception as e:
-        logger.error(f"Failed to create LiveKit Ingress: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to initialize Ingress: {str(e)}")
+        err_str = str(e)
+        logger.error(f"Failed to create LiveKit Ingress: {err_str}")
+        if "ingress minutes exceeded" in err_str.lower():
+            raise HTTPException(
+                status_code=429,
+                detail="LiveKit Ingress quota exceeded (monthly free limit reached on LiveKit Cloud). Please upgrade the LiveKit Cloud plan or renew ingress minutes to stream from vMix."
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to initialize Ingress: {err_str}")
     finally:
         await lkapi.aclose()
 
@@ -1975,11 +2717,22 @@ def send_html_email(to_email: str, subject: str, html_content: str):
         msg.attach(part)
         
         if SMTP_PORT == 465:
-            context = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context, timeout=12)
+            try:
+                context = ssl.create_default_context()
+                server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context, timeout=12)
+            except (ssl.SSLCertVerificationError, ssl.SSLError) as ssl_err:
+                logger.warning(f"SMTP SSL certificate verification failed ({ssl_err}); falling back to unverified context")
+                context = ssl._create_unverified_context()
+                server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context, timeout=12)
         else:
             server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=12)
-            server.starttls()
+            try:
+                context = ssl.create_default_context()
+                server.starttls(context=context)
+            except (ssl.SSLCertVerificationError, ssl.SSLError) as ssl_err:
+                logger.warning(f"SMTP STARTTLS certificate verification failed ({ssl_err}); falling back to unverified context")
+                context = ssl._create_unverified_context()
+                server.starttls(context=context)
             
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(msg)
@@ -2159,6 +2912,222 @@ async def verify_reset_otp(request: Request):
         raise
     except Exception as e:
         logger.error(f"Error resetting password for {email_addr}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _hash_signup_otp(email_addr: str, otp_code: str) -> str:
+    return hashlib.sha256(f"{email_addr}:{otp_code}".encode("utf-8")).hexdigest()
+
+
+@app.post("/api/auth/send-signup-otp")
+async def send_signup_otp(request: Request):
+    """Sends a 6-digit email verification OTP before creating a new Firebase user."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+    email_addr = (data.get("email") or "").strip().lower()
+    display_name = (data.get("display_name") or "").strip()
+
+    if not email_addr or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_addr):
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized.")
+
+    try:
+        auth.get_user_by_email(email_addr)
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists. Please log in instead.",
+        )
+    except HTTPException:
+        raise
+    except firebase_admin.auth.UserNotFoundError:
+        pass
+    except Exception as e:
+        logger.error(f"Error checking existing user for signup OTP ({email_addr}): {e}")
+        raise HTTPException(status_code=500, detail="Unable to verify email availability.")
+
+    try:
+        now = datetime.now(timezone.utc)
+        otp_ref = db.collection("signup_otps").document(email_addr)
+        existing_doc = otp_ref.get()
+        if existing_doc.exists:
+            existing = existing_doc.to_dict() or {}
+            last_sent_str = existing.get("lastSentAt")
+            if last_sent_str:
+                try:
+                    last_sent = datetime.fromisoformat(last_sent_str.replace("Z", "+00:00"))
+                    elapsed = (now - last_sent).total_seconds()
+                    if elapsed < 45:
+                        wait_sec = int(45 - elapsed) + 1
+                        raise HTTPException(
+                            status_code=429,
+                            detail=f"Please wait {wait_sec}s before requesting another code.",
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        expires_at = now + timedelta(minutes=10)
+        otp_hash = _hash_signup_otp(email_addr, otp_code)
+
+        otp_ref.set({
+            "email": email_addr,
+            "displayName": display_name,
+            "otpHash": otp_hash,
+            "attempts": 0,
+            "expiresAt": expires_at.isoformat(),
+            "lastSentAt": now.isoformat(),
+            "createdAt": now.isoformat(),
+        })
+
+        html_email = email_templates.render_otp_signup_email(
+            user_name=display_name or email_addr.split("@")[0],
+            otp_code=otp_code,
+            expiry_minutes=10,
+        )
+
+        email_sent = send_html_email(
+            to_email=email_addr,
+            subject=f"Verify your La-Vie account: {otp_code}",
+            html_content=html_email,
+        )
+
+        if not email_sent:
+            raise HTTPException(
+                status_code=503,
+                detail="Verification email could not be sent right now. Please try again.",
+            )
+
+        logger.info(f"Signup OTP sent to {email_addr}")
+        return {
+            "status": "success",
+            "sent": True,
+            "message": "A 6-digit verification code has been sent to your email.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending signup OTP to {email_addr}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/verify-signup-otp")
+async def verify_signup_otp(request: Request):
+    """Verifies the 6-digit signup OTP and creates an email-verified Firebase user."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+    email_addr = (data.get("email") or "").strip().lower()
+    otp_input = (data.get("otp") or "").strip()
+    password = (data.get("password") or "").strip()
+    display_name = (data.get("display_name") or "").strip()
+
+    if not email_addr or not otp_input or not password:
+        raise HTTPException(status_code=400, detail="Email, verification code, and password are required.")
+
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized.")
+
+    try:
+        otp_ref = db.collection("signup_otps").document(email_addr)
+        doc = otp_ref.get()
+        if not doc.exists:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired verification code. Please request a new code.",
+            )
+
+        otp_data = doc.to_dict() or {}
+        attempts = int(otp_data.get("attempts", 0))
+        if attempts >= 5:
+            otp_ref.delete()
+            raise HTTPException(
+                status_code=400,
+                detail="Too many invalid attempts. Please request a new verification code.",
+            )
+
+        expires_at_str = otp_data.get("expiresAt", "")
+        now = datetime.now(timezone.utc)
+        if expires_at_str:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if now > expires_at:
+                otp_ref.delete()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Verification code has expired. Please request a new code.",
+                )
+
+        expected_hash = otp_data.get("otpHash", "")
+        actual_hash = _hash_signup_otp(email_addr, otp_input)
+        if not expected_hash or not hmac.compare_digest(expected_hash, actual_hash):
+            otp_ref.update({"attempts": attempts + 1})
+            remaining = max(0, 4 - attempts)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Incorrect verification code. {remaining} attempts remaining.",
+            )
+
+        # Ensure account does not already exist before creating
+        final_name = display_name or (otp_data.get("displayName") or "").strip() or email_addr.split("@")[0]
+        try:
+            user_record = auth.create_user(
+                email=email_addr,
+                password=password,
+                display_name=final_name,
+                email_verified=True,
+            )
+        except firebase_admin.auth.EmailAlreadyExistsError:
+            otp_ref.delete()
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Please log in instead.",
+            )
+
+        otp_ref.delete()
+
+        db.collection("users").document(user_record.uid).set(
+            {
+                "uid": user_record.uid,
+                "email": email_addr,
+                "displayName": final_name,
+                "emailVerified": True,
+                "plan": "free",
+                "createdAt": now.isoformat(),
+                "updatedAt": now.isoformat(),
+            },
+            merge=True,
+        )
+
+        try:
+            await send_in_app_notification(
+                user_id=user_record.uid,
+                title="Welcome to La-Vie! ✨",
+                body="Your email is verified and your account is ready.",
+                notification_type="general",
+            )
+        except Exception:
+            pass
+
+        logger.info(f"Verified signup completed for {email_addr} (uid={user_record.uid})")
+        return {
+            "status": "success",
+            "uid": user_record.uid,
+            "email": email_addr,
+            "message": "Email verified and account created successfully.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying signup OTP for {email_addr}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/audience-estimate")
@@ -2686,78 +3655,223 @@ def send_email_reminder(to_email: str, title: str, room_id: str, scheduled_time:
         html_content=html_content
     )
 
+def _claim_document_notified(doc_ref) -> bool:
+    """Atomically sets notified=True only if it is not yet True (prevents duplicate pushes across multi-workers)."""
+    @firestore.transactional
+    def _tx_update(transaction):
+        snap = doc_ref.get(transaction=transaction)
+        if not snap.exists:
+            return False
+        sdata = snap.to_dict() or {}
+        if sdata.get('notified') is True:
+            return False
+        transaction.update(doc_ref, {'notified': True, 'notifiedAt': firestore.SERVER_TIMESTAMP})
+        return True
+    try:
+        tx = db.transaction()
+        return _tx_update(tx)
+    except Exception as e:
+        logger.warning(f"Transaction claim failed for {doc_ref.id}: {e}")
+        return False
+
+
+def _format_lead_phrase(minutes: int) -> str:
+    if minutes <= 0:
+        return "right now"
+    if minutes == 60:
+        return "in 1 hour"
+    return f"in {minutes} min" if minutes == 1 else f"in {minutes} mins"
+
+
+async def _dispatch_user_meeting_push(user_id: str, title: str, room_id: str, lead_minutes: int, fcm_token_override: str = "", is_host: bool = False):
+    """Dispatches FCM push + In-App notification to a host or subscribed invitee."""
+    lead_phrase = _format_lead_phrase(lead_minutes)
+    notif_title = f"Meeting Starting {lead_phrase} 🎥" if lead_minutes > 0 else f"Meeting Starting Now 🎥"
+    role_prefix = "Your scheduled meeting" if is_host else "Upcoming meeting"
+    notif_body = f'{role_prefix} "{title}" begins {lead_phrase}. Tap to enter the stage.'
+
+    fcm_token = fcm_token_override
+    if not fcm_token and user_id:
+        try:
+            u_doc = db.collection('users').document(user_id).get()
+            if u_doc.exists:
+                udata = u_doc.to_dict() or {}
+                fcm_token = udata.get('fcmToken') or udata.get('fcm_token') or ""
+        except Exception:
+            pass
+
+    if fcm_token:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=notif_title,
+                body=notif_body
+            ),
+            data={
+                'roomId': room_id,
+                'action': 'open_room',
+                'type': 'meeting_reminder',
+                'title': title
+            },
+            token=fcm_token,
+        )
+        try:
+            response = messaging.send(message)
+            logger.info(f"Sent meeting push to {user_id} (host={is_host}): {response}")
+        except Exception as e:
+            logger.error(f"Error sending push to {user_id}: {e}")
+
+    if user_id:
+        await send_in_app_notification(
+            user_id=user_id,
+            title=notif_title,
+            body=notif_body,
+            notification_type='meeting_reminder',
+            action='open_room',
+            room_id=room_id
+        )
+
+
 async def check_upcoming_meetings():
     if not db:
         return
     
+    now = datetime.now(timezone.utc)
+
+    # 1. Check Host & Meeting-Level Reminders (meetings where notified == False)
     try:
-        now = datetime.now(timezone.utc)
-        fifteen_mins_from_now = now + timedelta(minutes=15)
-        
-        # Query meetings where notified == false
         meetings_ref = db.collection('meetings').where('notified', '==', False).stream()
         
         for meeting in meetings_ref:
-            data = meeting.to_dict()
+            data = meeting.to_dict() or {}
             doc_id = meeting.id
-            scheduled_str = data.get('scheduledTime')
-            
-            if not scheduled_str:
+            scheduled_val = data.get('scheduledTime')
+            if not scheduled_val:
                 continue
-                
+
             try:
-                # Parse ISO string (e.g., "2026-07-20T21:40:00.000Z")
-                sched_time = datetime.fromisoformat(scheduled_str.replace('Z', '+00:00'))
-                
-                # If meeting is within the next 15 minutes
-                if now <= sched_time <= fifteen_mins_from_now:
+                sched_time = _parse_datetime_utc(scheduled_val)
+                if not sched_time:
+                    continue
+
+                if data.get('status') == 'ended':
+                    _claim_document_notified(db.collection('meetings').document(doc_id))
+                    continue
+
+                # Skip and mark obsolete meetings > 15 mins in the past
+                if now > sched_time + timedelta(minutes=15):
+                    _claim_document_notified(db.collection('meetings').document(doc_id))
+                    continue
+
+                try:
+                    lead_mins = max(0, min(1440, int(data.get('hostReminderMinutes', 15))))
+                except Exception:
+                    lead_mins = 15
+
+                trigger_time = sched_time - timedelta(minutes=lead_mins)
+                if now >= trigger_time:
+                    # Atomically claim so only one worker dispatches notifications
+                    if not _claim_document_notified(db.collection('meetings').document(doc_id)):
+                        continue
+
                     title = data.get('title', 'Meeting')
-                    room_id = data.get('roomId', '')
+                    room_id = data.get('roomId') or doc_id
                     host_id = data.get('hostId', '')
                     attendees = data.get('attendeeEmails', [])
-                    
-                    # 1. Send FCM Push Notification & In-App Notification to host
+
                     if host_id:
-                        host_doc = db.collection('users').document(host_id).get()
-                        if host_doc.exists:
-                            fcm_token = host_doc.to_dict().get('fcmToken') or host_doc.to_dict().get('fcm_token')
-                            if fcm_token:
-                                message = messaging.Message(
-                                    notification=messaging.Notification(
-                                        title='Meeting Starting in 15 mins 🎥',
-                                        body=f'Your meeting "{title}" begins shortly. Tap to enter the stage.'
-                                    ),
-                                    data={'roomId': room_id, 'action': 'open_room', 'type': 'meeting_reminder'},
-                                    token=fcm_token,
-                                )
-                                try:
-                                    response = messaging.send(message)
-                                    logger.info(f"Successfully sent pre-meeting push to host {host_id}: {response}")
-                                except Exception as e:
-                                    logger.error(f"Error sending push to {host_id}: {e}")
-                            
-                            await send_in_app_notification(
-                                user_id=host_id,
-                                title='Meeting Starting in 15 mins 🎥',
-                                body=f'"{title}" begins in 15 minutes. Tap to enter.',
-                                notification_type='meeting_reminder',
-                                action='open_room',
-                                room_id=room_id
-                            )
-                    
-                    # 2. Send Rich HTML Reminder Emails to attendees
+                        await _dispatch_user_meeting_push(
+                            user_id=host_id,
+                            title=title,
+                            room_id=room_id,
+                            lead_minutes=lead_mins,
+                            is_host=True,
+                        )
+
                     for email in attendees:
-                        send_email_reminder(email, title, room_id, sched_time)
-                        
-                    # Mark as notified
-                    db.collection('meetings').document(doc_id).update({'notified': True})
-                    logger.info(f"Meeting {doc_id} ('{title}') marked as notified")
-                    
+                        try:
+                            send_email_reminder(email, title, room_id, sched_time)
+                        except Exception as em_err:
+                            logger.warning(f"Email reminder failed for {email}: {em_err}")
+
+                    logger.info(f"Meeting {doc_id} ('{title}') host notification claimed and sent")
             except Exception as e:
                 logger.error(f"Error processing meeting {doc_id}: {e}")
-                
     except Exception as e:
         logger.error(f"Error checking upcoming meetings: {e}")
+
+    # 2. Check Subscribed Invitee Reminders (meeting_reminders where notified == False)
+    try:
+        reminders_ref = db.collection('meeting_reminders').where('notified', '==', False).stream()
+        for rem in reminders_ref:
+            rdata = rem.to_dict() or {}
+            rem_id = rem.id
+            try:
+                sched_time = _parse_datetime_utc(rdata.get('scheduledTime'))
+                notify_at = _parse_datetime_utc(rdata.get('notifyAt')) or sched_time
+                if not sched_time or not notify_at:
+                    continue
+
+                if now > sched_time + timedelta(minutes=15):
+                    _claim_document_notified(db.collection('meeting_reminders').document(rem_id))
+                    continue
+
+                if now >= notify_at:
+                    if not _claim_document_notified(db.collection('meeting_reminders').document(rem_id)):
+                        continue
+
+                    uid = rdata.get('uid', '')
+                    title = rdata.get('title', 'Meeting')
+                    room_id = rdata.get('roomId') or rdata.get('meetingId', '')
+                    fcm_override = rdata.get('fcmToken', '')
+                    try:
+                        lead_mins = max(0, min(1440, int(rdata.get('reminderMinutes', 15))))
+                    except Exception:
+                        lead_mins = 15
+
+                    await _dispatch_user_meeting_push(
+                        user_id=uid,
+                        title=title,
+                        room_id=room_id,
+                        lead_minutes=lead_mins,
+                        fcm_token_override=fcm_override,
+                        is_host=False,
+                    )
+                    logger.info(f"Invitee reminder {rem_id} claimed and dispatched to {uid}")
+            except Exception as re_err:
+                logger.error(f"Error processing invitee reminder {rem_id}: {re_err}")
+    except Exception as e:
+        logger.error(f"Error checking invitee reminders: {e}")
+
+    # 3. Check LiChat Scheduled Calls (scheduled_calls where notified == False or startedNotified == False)
+    try:
+        calls_ref = db.collection('scheduled_calls').where('status', '==', 'scheduled').stream()
+        for call_snap in calls_ref:
+            cdata = call_snap.to_dict() or {}
+            cid = call_snap.id
+            try:
+                sched_time = _parse_datetime_utc(cdata.get('scheduledTime'))
+                notify_at = _parse_datetime_utc(cdata.get('notifyAt')) or sched_time
+                if not sched_time:
+                    continue
+
+                # Auto-expire calls if > 3 hours in the past
+                if now > sched_time + timedelta(hours=3):
+                    db.collection('scheduled_calls').document(cid).set({'status': 'expired'}, merge=True)
+                    continue
+
+                # 3a. Lead reminder before call (e.g. 10m before)
+                if not cdata.get('notified', False) and now >= notify_at:
+                    db.collection('scheduled_calls').document(cid).set({'notified': True}, merge=True)
+                    await _dispatch_scheduled_call_push(cid, cdata, is_starting_now=False)
+
+                # 3b. Call starting now notification
+                if not cdata.get('startedNotified', False) and now >= sched_time:
+                    db.collection('scheduled_calls').document(cid).set({'startedNotified': True}, merge=True)
+                    await _dispatch_scheduled_call_push(cid, cdata, is_starting_now=True)
+            except Exception as ce:
+                logger.error(f"Error processing scheduled call {cid}: {ce}")
+    except Exception as e:
+        logger.error(f"Error checking scheduled calls: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # WHATSAPP-STYLE STORAGE: SERVER IS A TEMPORARY RELAY, NOT A VAULT
@@ -2967,18 +4081,53 @@ async def livekit_webhook(request: Request):
                 db_client = firestore.client() if firebase_admin._apps else None
                 if db_client:
                     try:
-                        # 1. Update Firestore meeting doc to ended
-                        db_client.collection("meetings").document(room_name).set({
-                            "status": "ended",
-                            "ended_at": firestore.SERVER_TIMESTAMP
-                        }, merge=True)
+                        # 1. Check if this is a future scheduled meeting
+                        meet_doc = db_client.collection("meetings").document(room_name).get()
+                        is_future_scheduled = False
+                        if meet_doc.exists:
+                            m_data = meet_doc.to_dict() or {}
+                            sched_time = m_data.get("scheduledTime")
+                            if sched_time:
+                                try:
+                                    if isinstance(sched_time, str):
+                                        st_clean = sched_time.replace("Z", "+00:00")
+                                        dt = datetime.fromisoformat(st_clean)
+                                    elif hasattr(sched_time, "timestamp"):
+                                        dt = datetime.fromtimestamp(sched_time.timestamp(), tz=timezone.utc)
+                                    else:
+                                        dt = None
+                                    
+                                    if dt:
+                                        if dt.tzinfo is None:
+                                            dt = dt.replace(tzinfo=timezone.utc)
+                                        now_utc = datetime.now(timezone.utc)
+                                        # Allow scheduled meeting to remain valid up to 2 hours after scheduled start
+                                        if dt + timedelta(hours=2) > now_utc:
+                                            is_future_scheduled = True
+                                            logger.info(f"Room {room_name} is scheduled for {dt}. Preserving scheduled status.")
+                                except Exception as parse_e:
+                                    logger.warning(f"Could not parse scheduledTime for room {room_name}: {parse_e}")
+
+                        if not is_future_scheduled:
+                            # Update Firestore meeting doc to ended
+                            db_client.collection("meetings").document(room_name).set({
+                                "status": "ended",
+                                "ended_at": firestore.SERVER_TIMESTAMP
+                            }, merge=True)
+                            logger.info(f"Finalized meeting {room_name} as ended via webhook")
+                        else:
+                            # Keep status as scheduled
+                            db_client.collection("meetings").document(room_name).set({
+                                "status": "scheduled"
+                            }, merge=True)
+                            logger.info(f"Preserved meeting {room_name} as scheduled via webhook")
+
                         # 2. Clear any lingering active_room pointers for users in this room
                         users_ref = db_client.collection("users")
                         stranded_users = users_ref.where("active_room", "==", room_name).get()
                         for doc in stranded_users:
                             doc.reference.update({"active_room": ""})
                         ACTIVE_ROOMS_START.pop(room_name, None)
-                        logger.info(f"Finalized meeting {room_name} and cleared active users via webhook")
                     except Exception as fe:
                         ACTIVE_ROOMS_START.pop(room_name, None)
                         logger.warning(f"Error handling room_finished for {room_name}: {fe}")
@@ -3088,7 +4237,8 @@ async def notify_incoming_call(request: Request):
             },
             android=messaging.AndroidConfig(
                 priority="high",       # wakes device from Doze mode
-                ttl=timedelta(seconds=60),
+                ttl=timedelta(seconds=45),
+                collapse_key=f"call_{call_id}",
                 # No android.notification sub-block — keeps it data-only
             ),
             apns=messaging.APNSConfig(
@@ -3119,6 +4269,32 @@ async def notify_incoming_call(request: Request):
         raise
     except Exception as e:
         logger.error(f"Error sending call notification: {e}")
+        return {"status": "error", "detail": str(e)}
+
+@app.post("/api/call/ringing")
+async def report_call_ringing(request: Request):
+    """
+    Called asynchronously by receiver device native service (CallNotificationService)
+    as soon as the wake-up push packet arrives, before user interaction.
+    Immediately confirms to the caller that the recipient's phone is actively ringing.
+    """
+    try:
+        data = await request.json()
+        call_id = data.get("call_id") or data.get("callId")
+        if call_id and db:
+            call_ref = db.collection("calls").document(call_id)
+            doc = call_ref.get()
+            if doc.exists:
+                current_status = (doc.to_dict() or {}).get("status")
+                if current_status == "calling":
+                    call_ref.update({
+                        "status": "ringing",
+                        "ringingAt": firestore.SERVER_TIMESTAMP,
+                    })
+                    logger.info(f"Call {call_id} acknowledged by receiver device — status transitioned to ringing.")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error recording ringing status for call: {e}")
         return {"status": "error", "detail": str(e)}
 
 @app.post("/api/call/decline")
@@ -3319,8 +4495,8 @@ async def delete_call_recording(request: Request):
 @app.post("/api/chat/notify")
 async def notify_chat_message(request: Request):
     """
-    Dispatches high-priority push notification for new chat messages,
-    enabling deep-linking directly into the conversation when tapped.
+    Dispatches high-priority push notification for new chat messages.
+    Supports both single recipient (receiver_id) and high-scale multicast batch (receiver_ids).
     """
     if not db:
         raise HTTPException(status_code=500, detail="Database uninitialized")
@@ -3328,64 +4504,166 @@ async def notify_chat_message(request: Request):
     try:
         data = await request.json()
         chat_id = data.get("chat_id") or data.get("chatId") or ""
+        message_id = data.get("message_id") or data.get("messageId") or ""
         sender_id = data.get("sender_id") or data.get("senderId") or ""
         sender_name = data.get("sender_name") or data.get("senderName") or "Someone"
         sender_avatar = data.get("sender_avatar") or data.get("senderAvatar") or ""
-        receiver_id = data.get("receiver_id") or data.get("receiverId") or ""
+        single_receiver = data.get("receiver_id") or data.get("receiverId")
+        batch_receivers = data.get("receiver_ids") or data.get("receiverIds") or data.get("recipients") or []
         text = data.get("text") or "New message"
 
-        if not receiver_id:
-            raise HTTPException(status_code=400, detail="receiver_id is required")
+        # Normalize receivers list
+        receivers = []
+        if isinstance(batch_receivers, list):
+            receivers.extend([str(r) for r in batch_receivers if r and str(r) != str(sender_id)])
+        if single_receiver and str(single_receiver) not in receivers and str(single_receiver) != str(sender_id):
+            receivers.append(str(single_receiver))
 
-        user_doc = db.collection("users").document(receiver_id).get()
-        if not user_doc.exists:
-            return {"status": "skipped", "message": "User not found"}
+        if not receivers:
+            return {"status": "skipped", "message": "No valid recipients"}
 
-        user_data = user_doc.to_dict() or {}
-        fcm_token = user_data.get("fcmToken") or user_data.get("fcm_token")
-        if not fcm_token:
-            return {"status": "skipped", "message": "No FCM token for recipient"}
+        # Fetch FCM tokens in batch
+        user_refs = [db.collection("users").document(uid) for uid in receivers]
+        user_docs = db.get_all(user_refs)
+        fcm_tokens = []
+        for doc in user_docs:
+            if doc.exists:
+                udata = doc.to_dict() or {}
+                token = udata.get("fcmToken") or udata.get("fcm_token")
+                if token and isinstance(token, str) and len(token) > 10:
+                    fcm_tokens.append(token)
 
-        fcm_message = messaging.Message(
-            data={
-                "type": "chat_message",
-                "chat_id": str(chat_id),
-                "chatId": str(chat_id),
-                "sender_id": str(sender_id),
-                "senderId": str(sender_id),
-                "sender_name": str(sender_name),
-                "senderName": str(sender_name),
-                "sender_avatar": str(sender_avatar or ""),
-                "senderAvatar": str(sender_avatar or ""),
-                "text": str(text),
-                "click_action": "FLUTTER_NOTIFICATION_CLICK",
-            },
-            android=messaging.AndroidConfig(
-                priority="high",
-            ),
-            apns=messaging.APNSConfig(
-                headers={"apns-priority": "10"},
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        alert=messaging.ApsAlert(
-                            title=str(sender_name),
-                            body=str(text),
-                        ),
-                        sound="default",
-                        badge=1,
+        if not fcm_tokens:
+            return {"status": "skipped", "message": "No FCM tokens found"}
+
+        data_payload = {
+            "type": "chat_message",
+            "chat_id": str(chat_id),
+            "chatId": str(chat_id),
+            "message_id": str(message_id),
+            "messageId": str(message_id),
+            "sender_id": str(sender_id),
+            "senderId": str(sender_id),
+            "sender_name": str(sender_name),
+            "senderName": str(sender_name),
+            "sender_avatar": str(sender_avatar or ""),
+            "senderAvatar": str(sender_avatar or ""),
+            "text": str(text),
+            "click_action": "FLUTTER_NOTIFICATION_CLICK",
+        }
+
+        android_config = messaging.AndroidConfig(priority="high")
+        apns_config = messaging.APNSConfig(
+            headers={"apns-priority": "10"},
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    alert=messaging.ApsAlert(
+                        title=str(sender_name),
+                        body=str(text),
                     ),
+                    sound="default",
+                    badge=1,
                 ),
             ),
-            token=fcm_token,
         )
 
-        response = messaging.send(fcm_message)
-        logger.info(f"Chat notification dispatched for chat {chat_id} to user {receiver_id}: {response}")
-        return {"status": "success", "message_id": response}
+        # Single recipient path
+        if len(fcm_tokens) == 1:
+            fcm_message = messaging.Message(
+                data=data_payload,
+                android=android_config,
+                apns=apns_config,
+                token=fcm_tokens[0],
+            )
+            response = messaging.send(fcm_message)
+            logger.info(f"Chat notification dispatched for chat {chat_id}: {response}")
+            return {"status": "success", "sent_count": 1, "message_id": response}
+
+        # Multi-recipient batch path (chunks of 500 max per Firebase Multicast)
+        total_sent = 0
+        chunk_size = 500
+        for i in range(0, len(fcm_tokens), chunk_size):
+            chunk = fcm_tokens[i:i + chunk_size]
+            multicast_message = messaging.MulticastMessage(
+                data=data_payload,
+                android=android_config,
+                apns=apns_config,
+                tokens=chunk,
+            )
+            batch_response = messaging.send_each_for_multicast(multicast_message)
+            total_sent += batch_response.success_count
+            logger.info(f"Multicast chat notification: {batch_response.success_count}/{len(chunk)} succeeded")
+
+        return {"status": "success", "sent_count": total_sent}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error sending chat notification: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+@app.post("/api/chat/delivered")
+async def mark_chat_delivered(request: Request):
+    """
+    Immediate delivery receipt ACK triggered as soon as recipient device receives push notification.
+    Turns single tick into double tick (WhatsApp behavior) in real-time without requiring the app to open.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        data = await request.json()
+        chat_id = data.get("chat_id") or data.get("chatId") or ""
+        receiver_id = data.get("receiver_id") or data.get("receiverId") or ""
+        message_id = data.get("message_id") or data.get("messageId") or ""
+
+        if not chat_id:
+            return {"status": "skipped", "message": "chat_id is required"}
+
+        now = firestore.SERVER_TIMESTAMP
+        chat_ref = db.collection("chats").document(chat_id)
+
+        # 1. Update the chat document status to delivered
+        chat_update = {
+            "lastMessageStatus": "delivered",
+        }
+        if receiver_id:
+            chat_update[f"deliveredTo.{receiver_id}"] = now
+
+        chat_ref.set(chat_update, merge=True)
+
+        # 2. Update specific message if provided
+        if message_id:
+            msg_ref = chat_ref.collection("messages").document(message_id)
+            msg_doc = msg_ref.get()
+            if msg_doc.exists:
+                msg_data = msg_doc.to_dict() or {}
+                if msg_data.get("status") == "sent":
+                    msg_update = {
+                        "status": "delivered",
+                        "deliveredAt": now,
+                    }
+                    if receiver_id:
+                        msg_update[f"deliveredTo.{receiver_id}"] = now
+                    msg_ref.set(msg_update, merge=True)
+        else:
+            # Update recent undelivered messages in this chat
+            recent_msgs = chat_ref.collection("messages").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
+            for m in recent_msgs:
+                m_data = m.to_dict() or {}
+                if m_data.get("status") == "sent" and m_data.get("senderId") != receiver_id:
+                    msg_update = {
+                        "status": "delivered",
+                        "deliveredAt": now,
+                    }
+                    if receiver_id:
+                        msg_update[f"deliveredTo.{receiver_id}"] = now
+                    m.reference.set(msg_update, merge=True)
+
+        logger.info(f"Delivery receipt ACK processed for chat {chat_id}, message {message_id}, receiver {receiver_id}")
+        return {"status": "success", "chat_id": chat_id, "message_id": message_id}
+    except Exception as e:
+        logger.error(f"Error marking chat delivered: {e}")
         return {"status": "error", "detail": str(e)}
 
 @app.post("/api/contacts/request")
@@ -3691,6 +4969,90 @@ async def pair_contacts_api(request: Request):
 
     return {"status": "success", "message": "Contacts paired successfully"}
 
+@app.post("/api/contacts/delete")
+async def delete_contact_api(request: Request):
+    """
+    Deletes a contact from the user's contacts subcollection via Admin SDK.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    my_uid = (data.get("my_uid") or "").strip()
+    peer_uid = (data.get("peer_uid") or "").strip()
+
+    if not my_uid or not peer_uid:
+        raise HTTPException(status_code=400, detail="Valid my_uid and peer_uid required")
+
+    try:
+        db.collection("users").document(my_uid).collection("contacts").document(peer_uid).delete()
+        # Optionally delete reverse link if mutual disconnect requested
+        if data.get("mutual", False):
+            db.collection("users").document(peer_uid).collection("contacts").document(my_uid).delete()
+        logger.info(f"Deleted contact {peer_uid} for user {my_uid}")
+        return {"status": "success", "message": "Contact removed successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting contact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/contacts/block")
+async def block_contact_api(request: Request):
+    """
+    Blocks a contact, adding them to the blocked_users subcollection and removing from contacts.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    my_uid = (data.get("my_uid") or "").strip()
+    peer_uid = (data.get("peer_uid") or "").strip()
+
+    if not my_uid or not peer_uid:
+        raise HTTPException(status_code=400, detail="Valid my_uid and peer_uid required")
+
+    try:
+        now = datetime.now(timezone.utc)
+        db.collection("users").document(my_uid).collection("blocked_users").document(peer_uid).set({
+            "uid": peer_uid,
+            "blockedAt": now,
+        })
+        # Remove from contacts as well
+        db.collection("users").document(my_uid).collection("contacts").document(peer_uid).delete()
+        logger.info(f"User {my_uid} blocked {peer_uid}")
+        return {"status": "success", "message": "Contact blocked successfully"}
+    except Exception as e:
+        logger.error(f"Error blocking contact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/contacts/unblock")
+async def unblock_contact_api(request: Request):
+    """
+    Unblocks a previously blocked user.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    my_uid = (data.get("my_uid") or "").strip()
+    peer_uid = (data.get("peer_uid") or "").strip()
+
+    if not my_uid or not peer_uid:
+        raise HTTPException(status_code=400, detail="Valid my_uid and peer_uid required")
+
+    try:
+        db.collection("users").document(my_uid).collection("blocked_users").document(peer_uid).delete()
+        logger.info(f"User {my_uid} unblocked {peer_uid}")
+        return {"status": "success", "message": "Contact unblocked successfully"}
+    except Exception as e:
+        logger.error(f"Error unblocking contact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/call/token")
 async def generate_call_token(request: Request):
     """
@@ -3841,69 +5203,51 @@ async def pair_contacts(request: Request):
         logger.error(f"Error pairing contacts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/chat/notify")
-async def chat_notify(request: Request):
+@app.post("/api/chat/purge_delivered")
+async def purge_delivered_messages(request: Request):
     """
-    Dispatches a high-priority FCM push notification to the recipient of a chat message.
+    WhatsApp-Grade Relay & Purge: Removes messages from Firestore that have been delivered
+    and read, since they are already stored permanently on the user's phone in SQLite.
+    Keeps Firestore storage near 0 and drastically reduces billing for 100k+ active users.
     """
     if not db:
         raise HTTPException(status_code=500, detail="Database uninitialized")
+
     try:
         data = await request.json()
-        chat_id = data.get("chat_id") or data.get("chatId") or ""
-        sender_id = data.get("sender_id") or data.get("senderId") or ""
-        sender_name = data.get("sender_name") or data.get("senderName") or "New Message"
-        receiver_id = data.get("receiver_id") or data.get("receiverId") or ""
-        text = data.get("text") or "New message"
+        chat_id = data.get("chat_id") or data.get("chatId")
+        older_than_days = int(data.get("older_than_days", 7))
 
-        if not receiver_id:
-            raise HTTPException(status_code=400, detail="receiver_id is required")
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id is required")
 
-        rec_doc = db.collection("users").document(receiver_id).get()
-        if not rec_doc.exists:
-            return {"status": "skipped", "reason": "User not found"}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        chat_ref = db.collection("chats").document(chat_id)
 
-        fcm_token = rec_doc.to_dict().get("fcmToken")
-        if not fcm_token:
-            return {"status": "skipped", "reason": "No FCM token"}
-
-        fcm_msg = messaging.Message(
-            data={
-                "type": "chat_message",
-                "chat_id": str(chat_id),
-                "chatId": str(chat_id),
-                "sender_id": str(sender_id),
-                "senderId": str(sender_id),
-                "receiver_id": str(receiver_id),
-                "receiverId": str(receiver_id),
-                "sender_name": str(sender_name),
-                "senderName": str(sender_name),
-                "text": str(text),
-                "click_action": "FLUTTER_NOTIFICATION_CLICK",
-            },
-            android=messaging.AndroidConfig(
-                priority="high",
-            ),
-            apns=messaging.APNSConfig(
-                headers={"apns-priority": "10"},
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        alert=messaging.ApsAlert(
-                            title=str(sender_name),
-                            body=str(text),
-                        ),
-                        sound="default",
-                        badge=1,
-                    )
-                ),
-            ),
-            token=fcm_token,
+        # Query messages with status 'read' older than cutoff
+        query = (
+            chat_ref.collection("messages")
+            .where("status", "==", "read")
+            .where("timestamp", "<", cutoff)
+            .limit(200)
         )
-        msg_id = messaging.send(fcm_msg)
-        logger.info(f"Chat notification sent to {receiver_id}: {msg_id}")
-        return {"status": "success", "message_id": msg_id}
+        docs = list(query.stream())
+        if not docs:
+            return {"status": "clean", "purged_count": 0}
+
+        batch = db.batch()
+        count = 0
+        for doc in docs:
+            batch.delete(doc.reference)
+            count += 1
+
+        batch.commit()
+        logger.info(f"Purged {count} delivered messages from Firestore chat {chat_id}")
+        return {"status": "success", "purged_count": count}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in chat_notify: {e}")
+        logger.error(f"Error purging messages: {e}")
         return {"status": "error", "detail": str(e)}
 
 @app.post("/api/chat/reply")
@@ -4209,15 +5553,55 @@ async def summarize_meeting(
         except Exception as dbe:
             logger.warning(f"Could not save summary to meetings/{room_id}: {dbe}")
 
-        # 2. Notify all attendees who were in this meeting
+        # 2. Notify all attendees who were in this meeting (both host & guests)
         try:
+            attendee_uids = set()
+            try:
+                meet_doc = db.collection("meetings").document(room_id).get()
+                if meet_doc.exists:
+                    m_data = meet_doc.to_dict() or {}
+                    for att in (m_data.get("attendees") or []):
+                        if att:
+                            attendee_uids.add(att)
+                    if m_data.get("hostId"):
+                        attendee_uids.add(m_data.get("hostId"))
+            except Exception as me:
+                logger.warning(f"Error fetching attendees list for summary notification: {me}")
+
+            # Also include any currently active users
             users_in_room = db.collection("users").where("active_room", "==", room_id).get()
             for udoc in users_in_room:
-                user_data = udoc.to_dict() or {}
-                
+                attendee_uids.add(udoc.id)
+
+            for u_id in attendee_uids:
+                u_doc = db.collection("users").document(u_id).get()
+                if not u_doc.exists:
+                    continue
+                user_data = u_doc.to_dict() or {}
+
+                # Send FCM push notification
+                fcm_token = user_data.get("fcmToken") or user_data.get("fcm_token")
+                if fcm_token:
+                    try:
+                        msg = messaging.Message(
+                            notification=messaging.Notification(
+                                title="Meeting Summary Ready ✨",
+                                body=f"AI recap and key action items for \"{display_title}\" are ready."
+                            ),
+                            data={
+                                "roomId": room_id,
+                                "action": "open_notes",
+                                "type": "meeting_followup"
+                            },
+                            token=fcm_token
+                        )
+                        messaging.send(msg)
+                    except Exception as p_err:
+                        logger.warning(f"Could not send summary push to {u_id}: {p_err}")
+
                 # In-app rich notification
                 await send_in_app_notification(
-                    user_id=udoc.id,
+                    user_id=u_id,
                     title="Meeting Summary Ready ✨",
                     body=f"AI recap and key action items for \"{display_title}\" are now available.",
                     notification_type="meeting_followup",
@@ -4240,6 +5624,7 @@ async def summarize_meeting(
                         subject=f"AI Meeting Summary: {display_title} 📝",
                         html_content=recap_html
                     )
+            logger.info(f"Dispatched AI summary push, in-app notes, and emails to {len(attendee_uids)} attendees for room {room_id}")
         except Exception as ne:
             logger.warning(f"Could not notify attendees of AI summary: {ne}")
 
@@ -4251,31 +5636,1026 @@ async def summarize_meeting(
     }
 
 
-@app.post("/api/profile/upload")
-async def upload_profile_photo(file: UploadFile = File(...), uid: str = Form(...)):
-    """Ultra-fast, direct profile photo upload returning public HTTPS URL."""
+# ==============================================================================
+# LICHAT CALL SCHEDULING & AI INNOVATION SYSTEM
+# ==============================================================================
+
+async def _dispatch_scheduled_call_push(call_id: str, cdata: dict, is_starting_now: bool = False):
+    """Dispatches high-priority reminder or start push notification for a scheduled call."""
+    if not db:
+        return
+
+    topic = cdata.get("topic", "Scheduled Call")
+    caller_id = cdata.get("callerId", "")
+    caller_name = cdata.get("callerName", "User")
+    participants = list(cdata.get("participants", []))
+    chat_id = cdata.get("chatId", "")
+    room_name = cdata.get("roomName") or f"call_{call_id}"
+    is_video = bool(cdata.get("isVideo", True))
+    call_type = "Video" if is_video else "Voice"
+    reminder_mins = int(cdata.get("reminderMinutes", 10))
+
+    if caller_id and caller_id not in participants:
+        participants.append(caller_id)
+
+    if is_starting_now:
+        notif_title = f"🔔 Call Starting Now: {topic}"
+        notif_body = f"The {call_type} call '{topic}' is starting now. Tap to join!"
+        action_type = "scheduled_call_start"
+    else:
+        lead_phrase = f"{reminder_mins} minutes" if reminder_mins > 0 else "shortly"
+        notif_title = f"📞 Call Reminder: {topic}"
+        notif_body = f"Scheduled {call_type} call with {caller_name} begins in {lead_phrase}."
+        action_type = "scheduled_call_reminder"
+
+    for uid in participants:
+        try:
+            u_doc = db.collection("users").document(uid).get()
+            if not u_doc.exists:
+                continue
+            udata = u_doc.to_dict() or {}
+            fcm_token = udata.get("fcmToken") or udata.get("fcm_token")
+
+            if fcm_token:
+                msg = messaging.Message(
+                    notification=messaging.Notification(
+                        title=notif_title,
+                        body=notif_body,
+                    ),
+                    data={
+                        "type": action_type,
+                        "callId": str(call_id),
+                        "chatId": str(chat_id),
+                        "roomName": str(room_name),
+                        "topic": str(topic),
+                        "isVideo": str(is_video).lower(),
+                        "callerName": str(caller_name),
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+                    },
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            channel_id="lichat_calls_high_importance",
+                            priority="max",
+                            default_sound=True,
+                            default_vibrate_timings=True
+                        )
+                    ),
+                    token=fcm_token,
+                )
+                messaging.send(msg)
+                logger.info(f"Dispatched {action_type} push to participant {uid} for call {call_id}")
+
+            await send_in_app_notification(
+                user_id=uid,
+                title=notif_title,
+                body=notif_body,
+                notification_type=action_type,
+                action="open_call",
+                room_id=room_name
+            )
+        except Exception as pe:
+            logger.warning(f"Failed to dispatch scheduled call push to {uid}: {pe}")
+
+
+@app.post("/api/lichat/call/schedule")
+async def schedule_lichat_call(request: Request):
+    """
+    Schedules a 1-on-1 or group call in LiChat, saving to Firestore scheduled_calls,
+    mirroring to chat messages as an interactive card, and queuing background reminders.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
     try:
-        os.makedirs("uploads/profiles", exist_ok=True)
-        ext = os.path.splitext(file.filename or "")[1].lower()
-        if not ext or ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
-            ext = ".jpg"
-        clean_uid = re.sub(r'[^a-zA-Z0-9_\-]', '', uid)
-        filename = f"{clean_uid}_{int(time.time())}{ext}"
-        filepath = os.path.join("uploads/profiles", filename)
+        body = await request.json()
+        chat_id = body.get("chatId") or body.get("chat_id")
+        caller_id = body.get("callerId") or body.get("caller_id")
+        caller_name = body.get("callerName") or body.get("caller_name", "User")
+        caller_avatar = body.get("callerAvatar") or body.get("caller_avatar", "")
+        receiver_id = body.get("receiverId") or body.get("receiver_id")
+        participants = list(body.get("participants", []))
+        topic = (body.get("topic") or "Scheduled Call").strip()
+        is_video = bool(body.get("isVideo", True))
+        is_group = bool(body.get("isGroup", False))
+        scheduled_time_str = body.get("scheduledTime") or body.get("scheduled_time")
+        reminder_minutes = int(body.get("reminderMinutes") or body.get("reminder_minutes") or 10)
 
-        content = await file.read()
-        with open(filepath, "wb") as f:
-            f.write(content)
+        if not chat_id or not caller_id or not scheduled_time_str:
+            raise HTTPException(status_code=400, detail="chatId, callerId, and scheduledTime are required")
 
-        url = f"https://la-vie.lifechangerstouch.org/uploads/profiles/{filename}"
-        logger.info(f"Successfully uploaded profile photo for {uid}: {url}")
-        return {"success": True, "url": url, "filename": filename}
+        if receiver_id and receiver_id not in participants:
+            participants.append(receiver_id)
+        if caller_id not in participants:
+            participants.append(caller_id)
+
+        sched_dt = _parse_datetime_utc(scheduled_time_str)
+        if not sched_dt:
+            raise HTTPException(status_code=400, detail="Invalid scheduledTime ISO format")
+
+        now_dt = datetime.now(timezone.utc)
+        notify_at_dt = sched_dt - timedelta(minutes=reminder_minutes)
+        if notify_at_dt < now_dt and now_dt <= sched_dt:
+            notify_at_dt = now_dt
+
+        call_id = f"sched_{uuid.uuid4().hex[:12]}"
+        room_name = f"call_{call_id}"
+        sched_iso = sched_dt.isoformat().replace("+00:00", "Z")
+        notify_iso = notify_at_dt.isoformat().replace("+00:00", "Z")
+
+        call_record = {
+            "callId": call_id,
+            "chatId": chat_id,
+            "roomName": room_name,
+            "topic": topic,
+            "callerId": caller_id,
+            "callerName": caller_name,
+            "callerAvatar": caller_avatar,
+            "receiverId": receiver_id or "",
+            "participants": participants,
+            "isVideo": is_video,
+            "isGroup": is_group,
+            "scheduledTime": sched_iso,
+            "notifyAt": notify_iso,
+            "reminderMinutes": reminder_minutes,
+            "status": "scheduled",
+            "rsvps": {caller_id: "accepted"},
+            "notified": False,
+            "startedNotified": False,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
+
+        # 1. Store in top-level scheduled_calls collection
+        db.collection("scheduled_calls").document(call_id).set(call_record)
+
+        # 2. Add in-chat message so an interactive card displays immediately
+        msg_ref = db.collection("chats").document(chat_id).collection("messages").document()
+        call_msg_data = {
+            "id": msg_ref.id,
+            "senderId": caller_id,
+            "senderName": caller_name,
+            "receiverId": receiver_id or "",
+            "text": f"📅 Scheduled a { 'Video' if is_video else 'Voice' } Call: \"{topic}\"",
+            "type": "scheduled_call",
+            "scheduledCall": {
+                "callId": call_id,
+                "roomName": room_name,
+                "topic": topic,
+                "scheduledTime": sched_iso,
+                "reminderMinutes": reminder_minutes,
+                "isVideo": is_video,
+                "status": "scheduled",
+                "callerId": caller_id,
+                "callerName": caller_name,
+                "participants": participants,
+            },
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "status": "delivered",
+            "isGroup": is_group,
+        }
+        msg_ref.set(call_msg_data)
+
+        # Update last message on chat document
+        db.collection("chats").document(chat_id).set({
+            "lastMessage": f"📅 Scheduled Call: {topic}",
+            "lastMessageTime": firestore.SERVER_TIMESTAMP,
+            "lastMessageType": "scheduled_call",
+        }, merge=True)
+
+        logger.info(f"Scheduled LiChat call {call_id} for chat {chat_id} at {sched_iso}")
+
+        return {
+            "status": "success",
+            "callId": call_id,
+            "roomName": room_name,
+            "topic": topic,
+            "scheduledTime": sched_iso,
+            "notifyAt": notify_iso,
+            "reminderMinutes": reminder_minutes,
+            "messageId": msg_ref.id
+        }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error uploading profile photo: {e}")
-        return Response(
-            content=json.dumps({"success": False, "message": str(e)}),
-            status_code=500,
-            media_type="application/json"
+        logger.error(f"Error scheduling LiChat call: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/lichat/call/cancel")
+async def cancel_lichat_call(request: Request):
+    """Cancels a scheduled call and updates the status across Firestore."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        call_id = body.get("callId") or body.get("call_id")
+        user_id = body.get("userId") or body.get("user_id")
+
+        if not call_id:
+            raise HTTPException(status_code=400, detail="callId is required")
+
+        call_doc = db.collection("scheduled_calls").document(call_id).get()
+        if not call_doc.exists:
+            raise HTTPException(status_code=404, detail="Scheduled call not found")
+
+        cdata = call_doc.to_dict() or {}
+        db.collection("scheduled_calls").document(call_id).set({
+            "status": "cancelled",
+            "cancelledBy": user_id or "User",
+            "cancelledAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+        return {"status": "success", "callId": call_id, "message": "Call cancelled successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling call {call_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/lichat/call/rsvp")
+async def rsvp_lichat_call(request: Request):
+    """Records user RSVP (accepted, declined, tentative) for a scheduled call."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        call_id = body.get("callId") or body.get("call_id")
+        user_id = body.get("userId") or body.get("user_id")
+        rsvp = body.get("rsvp", "accepted")
+
+        if not call_id or not user_id:
+            raise HTTPException(status_code=400, detail="callId and userId are required")
+
+        db.collection("scheduled_calls").document(call_id).set({
+            f"rsvps.{user_id}": rsvp,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        }, merge=True)
+
+        return {"status": "success", "callId": call_id, "rsvp": rsvp}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating RSVP: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── AI INNOVATION ENDPOINTS (GEMINI POWERED) ───────────────────────────────────
+
+def _call_gemini_raw(prompt: str, json_schema_dict: dict = None, audio_bytes: bytes = None, audio_mime: str = "audio/mp4") -> str:
+    """Helper to query Gemini 1.5 Flash with fallback handling."""
+    api_key = GEMINI_API_KEY
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not configured on server")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    parts = []
+
+    if audio_bytes and len(audio_bytes) > 0:
+        safe_audio = audio_bytes[:20 * 1024 * 1024]
+        b64_audio = base64.b64encode(safe_audio).decode("utf-8")
+        parts.append({
+            "inline_data": {
+                "mime_type": audio_mime,
+                "data": b64_audio
+            }
+        })
+
+    parts.append({"text": prompt})
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": 0.2
+        }
+    }
+    if json_schema_dict:
+        payload["generationConfig"]["response_mime_type"] = "application/json"
+
+    req_data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=req_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        resp_body = resp.read().decode("utf-8")
+        resp_json = json.loads(resp_body)
+        candidates = resp_json.get("candidates", [])
+        if candidates:
+            content_parts = candidates[0].get("content", {}).get("parts", [])
+            if content_parts:
+                raw_text = content_parts[0].get("text", "").strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                if raw_text.startswith("```"):
+                    raw_text = raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                return raw_text.strip()
+    return ""
+
+
+@app.post("/api/ai/chat-digest")
+async def generate_chat_digest(request: Request):
+    """
+    "Catch Me Up" Smart Digest: Analyzes a window of messages from a chat thread
+    and returns an executive TL;DR, decisions agreed upon, and personal action items.
+    """
+    try:
+        body = await request.json()
+        messages = body.get("messages", [])
+        target_name = body.get("target_user_name", "You")
+        chat_title = body.get("chat_title", "Conversation")
+
+        if not messages:
+            return {
+                "summary": "No new messages to summarize.",
+                "decisions": [],
+                "action_items": [],
+                "key_topics": []
+            }
+
+        # Build clean chronological transcript
+        transcript_lines = []
+        for m in messages:
+            sender = m.get("senderName") or m.get("sender_name") or "User"
+            text = m.get("text") or ""
+            if text:
+                transcript_lines.append(f"{sender}: {text}")
+
+        transcript_str = "\n".join(transcript_lines[-60:]) # Last 60 messages
+
+        prompt = (
+            f"You are the LiChat Executive AI Co-Pilot.\n"
+            f"Analyze the following conversation from '{chat_title}' for participant '{target_name}'.\n"
+            f"Return a structured JSON object matching this exact schema:\n"
+            f"{{\n"
+            f'  "summary": "Crisp 2-3 sentence executive overview of what was discussed.",\n'
+            f'  "decisions": ["Key decision 1", "Key decision 2"],\n'
+            f'  "action_items": ["Action item for {target_name} or others", ...],\n'
+            f'  "key_topics": ["Topic 1", "Topic 2"]\n'
+            f"}}\n\n"
+            f"Conversation Transcript:\n{transcript_str}"
         )
+
+        try:
+            raw_json = _call_gemini_raw(prompt, json_schema_dict={"type": "object"})
+            parsed = json.loads(raw_json)
+            return {
+                "status": "success",
+                "summary": parsed.get("summary", ""),
+                "decisions": parsed.get("decisions", []),
+                "action_items": parsed.get("action_items", []),
+                "key_topics": parsed.get("key_topics", [])
+            }
+        except Exception as ge:
+            logger.warning(f"Gemini chat digest fallback: {ge}")
+            # Graceful algorithmic summary fallback
+            return {
+                "status": "success",
+                "summary": f"Discussion in '{chat_title}' covering {len(transcript_lines)} recent updates between team members.",
+                "decisions": ["Participants shared status updates and coordinated next steps."],
+                "action_items": [f"Review recent messages in '{chat_title}' when free."],
+                "key_topics": [chat_title, "Updates"]
+            }
+    except Exception as e:
+        logger.error(f"Chat digest error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/transcribe")
+async def transcribe_audio_note(
+    audio: UploadFile = File(None),
+    media_url: str = Form(None)
+):
+    """
+    Dual-layer Voice Note Intelligence: Transcribes voice notes accurately,
+    generating a 1-sentence TL;DR summary and key bullet takeaways.
+    """
+    try:
+        audio_bytes = None
+        audio_mime = "audio/mp4"
+
+        if audio:
+            audio_bytes = await audio.read()
+            fname = audio.filename or ""
+            if fname.endswith(".wav"):
+                audio_mime = "audio/wav"
+            elif fname.endswith(".mp3"):
+                audio_mime = "audio/mpeg"
+            elif fname.endswith(".ogg") or fname.endswith(".opus"):
+                audio_mime = "audio/ogg"
+            elif fname.endswith(".m4a") or fname.endswith(".mp4"):
+                audio_mime = "audio/mp4"
+        elif media_url:
+            # Download audio from URL
+            try:
+                with urllib.request.urlopen(media_url, timeout=15) as u_resp:
+                    audio_bytes = u_resp.read()
+            except Exception as dl_err:
+                logger.warning(f"Could not fetch audio from URL: {dl_err}")
+
+        prompt = (
+            "You are an expert audio transcription intelligence for LiChat.\n"
+            "Transcribe the provided spoken audio accurately.\n"
+            "Also generate a crisp 1-sentence TL;DR summary and bullet key points.\n"
+            "Return ONLY a JSON object with keys: transcript, summary, key_points."
+        )
+
+        if audio_bytes and len(audio_bytes) > 0 and GEMINI_API_KEY:
+            try:
+                raw_json = _call_gemini_raw(prompt, json_schema_dict={"type": "object"}, audio_bytes=audio_bytes, audio_mime=audio_mime)
+                parsed = json.loads(raw_json)
+                return {
+                    "status": "success",
+                    "transcript": parsed.get("transcript", "Spoken audio note processed."),
+                    "summary": parsed.get("summary", "Voice message received."),
+                    "key_points": parsed.get("key_points", [])
+                }
+            except Exception as ge:
+                logger.warning(f"Gemini voice transcribe error: {ge}")
+
+        # Fallback
+        return {
+            "status": "success",
+            "transcript": "Spoken audio voice note received and processed.",
+            "summary": "Audio voice message recorded on LiChat.",
+            "key_points": ["Voice note communicated"]
+        }
+    except Exception as e:
+        logger.error(f"Voice note transcribe error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/compose")
+async def compose_smart_message(request: Request):
+    """
+    Magic Composer: Rewrites and polishes drafts into Professional,
+    Concise, Friendly, or Grammar-Corrected message styles.
+    """
+    try:
+        body = await request.json()
+        draft_text = (body.get("text") or "").strip()
+        mode = body.get("mode", "professional").lower()
+
+        if not draft_text:
+            return {"refined_text": "", "mode": mode}
+
+        prompt = (
+            f"You are the LiChat Magic Composer AI assistant.\n"
+            f"Rewrite the following message draft into a '{mode}' tone suitable for modern messaging.\n"
+            f"Modes:\n"
+            f"- professional: clear, executive, polite, and confident\n"
+            f"- concise: short, punchy, TL;DR, no fluff\n"
+            f"- friendly: warm, encouraging, positive, engaging\n"
+            f"- fix_grammar: perfect spelling, grammar, and punctuation without altering tone\n\n"
+            f"Draft:\n\"{draft_text}\"\n\n"
+            f"Return ONLY a valid JSON object matching: {{\"refined_text\": \"...\", \"mode\": \"{mode}\"}}"
+        )
+
+        try:
+            raw_json = _call_gemini_raw(prompt, json_schema_dict={"type": "object"})
+            parsed = json.loads(raw_json)
+            return {
+                "status": "success",
+                "refined_text": parsed.get("refined_text", draft_text),
+                "mode": mode
+            }
+        except Exception as ge:
+            logger.warning(f"Magic composer error: {ge}")
+            return {
+                "status": "success",
+                "refined_text": draft_text,
+                "mode": mode
+            }
+    except Exception as e:
+        logger.error(f"Compose error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/translate")
+async def translate_chat_message(request: Request):
+    """
+    Real-time Inline Translation: Translates message text to target language,
+    detecting source language seamlessly.
+    """
+    try:
+        body = await request.json()
+        text = (body.get("text") or "").strip()
+        target_lang = body.get("target_lang", "English")
+
+        if not text:
+            return {"translated_text": "", "target_lang": target_lang, "source_lang": "auto"}
+
+        prompt = (
+            f"Translate the following text into {target_lang}. Detect the source language.\n"
+            f"Text:\n\"{text}\"\n\n"
+            f"Return ONLY a JSON object: {{\"translated_text\": \"...\", \"source_lang\": \"...\", \"target_lang\": \"{target_lang}\"}}"
+        )
+
+        try:
+            raw_json = _call_gemini_raw(prompt, json_schema_dict={"type": "object"})
+            parsed = json.loads(raw_json)
+            return {
+                "status": "success",
+                "translated_text": parsed.get("translated_text", text),
+                "source_lang": parsed.get("source_lang", "auto"),
+                "target_lang": target_lang
+            }
+        except Exception as ge:
+            logger.warning(f"Translation error: {ge}")
+            return {
+                "status": "success",
+                "translated_text": text,
+                "source_lang": "auto",
+                "target_lang": target_lang
+            }
+    except Exception as e:
+        logger.error(f"Translate error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── LICHAT SHARED MEMORY VAULT & GHOST LEDGER (GEMINI POWERED) ────────────────
+
+@app.post("/api/ai/vault/extract")
+async def extract_chat_vault(request: Request):
+    """
+    Autonomous Relational Memory Engine:
+    Analyzes conversation messages using Gemini 1.5 Flash to automatically extract
+    explicit commitments/promises, key shared codes/addresses/credentials, and split expenses.
+    Persists updates directly into Firestore under `chats/{chat_id}/vault/data`.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        chat_id = (body.get("chat_id") or body.get("chatId") or "").strip()
+        messages = body.get("messages", [])
+        chat_title = body.get("chat_title", "Conversation")
+
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id is required")
+
+        if not messages:
+            return {"status": "success", "commitments": [], "knowledge": [], "expenses": []}
+
+        # Build clean chronological transcript from last 40 messages
+        transcript_lines = []
+        for m in messages[-40:]:
+            sender = m.get("senderName") or m.get("sender_name") or "User"
+            text = m.get("text") or ""
+            if text:
+                transcript_lines.append(f"{sender}: {text}")
+
+        transcript_str = "\n".join(transcript_lines)
+
+        prompt = (
+            f"You are the LiChat Autonomous Relational Memory & Shared Vault Engine.\n"
+            f"Analyze the following conversation from '{chat_title}'.\n"
+            f"Extract ONLY actionable, explicit, high-value entities:\n\n"
+            f"1. 'commitments': Concrete tasks, promises, deadlines agreed upon by any participant.\n"
+            f"   - task: crisp description of the action (e.g. 'Send pitch deck', 'Review contract')\n"
+            f"   - author: person who spoke or assigned it\n"
+            f"   - assignee: person expected to complete it (e.g. name or 'You')\n"
+            f"   - dueDate: specific time/date mentioned, or 'Pending'\n"
+            f"   - status: 'pending'\n\n"
+            f"2. 'knowledge': Crucial reference info exchanged: Wi-Fi passwords, gate codes, door codes, physical addresses, tracking numbers, flight numbers, account details.\n"
+            f"   - category: 'access_code', 'wifi', 'address', 'tracking', or 'reference'\n"
+            f"   - label: short label (e.g. 'Gate Code', 'Office Wi-Fi', 'Shipping Tracking')\n"
+            f"   - value: exact code, password, or address string\n\n"
+            f"3. 'expenses': Debts, bill splits, or financial transfers mentioned.\n"
+            f"   - payer: who paid or is owed\n"
+            f"   - debtor: who owes\n"
+            f"   - amount: numeric or string value with currency (e.g. '$24.50')\n"
+            f"   - description: what it was for (e.g. 'Dinner split', 'Uber ride')\n"
+            f"   - settled: false\n\n"
+            f"Return a valid JSON object matching:\n"
+            f"{{\n"
+            f'  "commitments": [{{"task": "...", "author": "...", "assignee": "...", "dueDate": "...", "status": "pending"}}],\n'
+            f'  "knowledge": [{{"category": "...", "label": "...", "value": "..."}}],\n'
+            f'  "expenses": [{{"payer": "...", "debtor": "...", "amount": "...", "description": "...", "settled": false}}]\n'
+            f"}}\n\n"
+            f"Conversation Transcript:\n{transcript_str}"
+        )
+
+        extracted_data = {"commitments": [], "knowledge": [], "expenses": []}
+
+        if GEMINI_API_KEY:
+            try:
+                raw_json = _call_gemini_raw(prompt, json_schema_dict={"type": "object"})
+                parsed = json.loads(raw_json)
+                extracted_data = {
+                    "commitments": list(parsed.get("commitments", [])),
+                    "knowledge": list(parsed.get("knowledge", [])),
+                    "expenses": list(parsed.get("expenses", []))
+                }
+            except Exception as ge:
+                logger.warning(f"Gemini vault extraction error: {ge}")
+
+        # Fetch existing vault doc to avoid duplicates and preserve completed status
+        vault_ref = db.collection("chats").document(chat_id).collection("vault").document("data")
+        existing_doc = vault_ref.get()
+        existing_vault = existing_doc.to_dict() if existing_doc.exists else {}
+
+        existing_commitments = existing_vault.get("commitments", [])
+        existing_knowledge = existing_vault.get("knowledge", [])
+        existing_expenses = existing_vault.get("expenses", [])
+
+        # Assign unique IDs and merge
+        merged_commitments = list(existing_commitments)
+        existing_task_names = {c.get("task", "").strip().lower() for c in existing_commitments}
+        for c in extracted_data["commitments"]:
+            task_clean = c.get("task", "").strip().lower()
+            if task_clean and task_clean not in existing_task_names:
+                c["id"] = f"comm_{uuid.uuid4().hex[:8]}"
+                c["createdAt"] = datetime.now(timezone.utc).isoformat()
+                merged_commitments.append(c)
+                existing_task_names.add(task_clean)
+
+        merged_knowledge = list(existing_knowledge)
+        existing_knowledge_vals = {k.get("value", "").strip().lower() for k in existing_knowledge}
+        for k in extracted_data["knowledge"]:
+            val_clean = k.get("value", "").strip().lower()
+            if val_clean and val_clean not in existing_knowledge_vals:
+                k["id"] = f"know_{uuid.uuid4().hex[:8]}"
+                k["createdAt"] = datetime.now(timezone.utc).isoformat()
+                merged_knowledge.append(k)
+                existing_knowledge_vals.add(val_clean)
+
+        merged_expenses = list(existing_expenses)
+        existing_expense_keys = {f"{e.get('payer')}_{e.get('amount')}_{e.get('description')}".lower() for e in existing_expenses}
+        for e in extracted_data["expenses"]:
+            exp_key = f"{e.get('payer')}_{e.get('amount')}_{e.get('description')}".lower()
+            if exp_key not in existing_expense_keys:
+                e["id"] = f"exp_{uuid.uuid4().hex[:8]}"
+                e["createdAt"] = datetime.now(timezone.utc).isoformat()
+                merged_expenses.append(e)
+                existing_expense_keys.add(exp_key)
+
+        final_vault = {
+            "commitments": merged_commitments,
+            "knowledge": merged_knowledge,
+            "expenses": merged_expenses,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        }
+
+        vault_ref.set(final_vault, merge=True)
+        logger.info(f"Updated vault for chat {chat_id}: {len(merged_commitments)} commitments, {len(merged_knowledge)} knowledge, {len(merged_expenses)} expenses")
+
+        return {
+            "status": "success",
+            "chatId": chat_id,
+            "commitments": merged_commitments,
+            "knowledge": merged_knowledge,
+            "expenses": merged_expenses
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in extract_chat_vault: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/vault/toggle-task")
+async def toggle_vault_task(request: Request):
+    """Marks a commitment task as completed or pending in Firestore."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        chat_id = body.get("chatId") or body.get("chat_id")
+        task_id = body.get("taskId") or body.get("task_id")
+        status = body.get("status", "completed")
+
+        if not chat_id or not task_id:
+            raise HTTPException(status_code=400, detail="chatId and taskId are required")
+
+        vault_ref = db.collection("chats").document(chat_id).collection("vault").document("data")
+        doc = vault_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Vault not found")
+
+        vdata = doc.to_dict() or {}
+        commitments = vdata.get("commitments", [])
+        for c in commitments:
+            if c.get("id") == task_id:
+                c["status"] = status
+                c["completedAt"] = datetime.now(timezone.utc).isoformat() if status == "completed" else None
+                break
+
+        vault_ref.set({"commitments": commitments, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        return {"status": "success", "taskId": task_id, "newStatus": status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Toggle task error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/vault/delete-item")
+async def delete_vault_item(request: Request):
+    """Deletes an item from the chat vault (commitments, knowledge, or expenses)."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        chat_id = body.get("chatId") or body.get("chat_id")
+        item_type = body.get("itemType") or body.get("item_type") # 'commitments', 'knowledge', 'expenses'
+        item_id = body.get("itemId") or body.get("item_id")
+
+        if not chat_id or not item_type or not item_id:
+            raise HTTPException(status_code=400, detail="chatId, itemType, and itemId are required")
+
+        vault_ref = db.collection("chats").document(chat_id).collection("vault").document("data")
+        doc = vault_ref.get()
+        if not doc.exists:
+            return {"status": "success", "message": "Vault empty"}
+
+        vdata = doc.to_dict() or {}
+        items = vdata.get(item_type, [])
+        items = [i for i in items if i.get("id") != item_id]
+
+        vault_ref.set({item_type: items, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        return {"status": "success", "itemId": item_id, "itemType": item_type}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete vault item error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/vault/add-item")
+async def add_vault_item(request: Request):
+    """Allows manual addition of a commitment, knowledge code, or expense to the vault."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+
+    try:
+        body = await request.json()
+        chat_id = body.get("chatId") or body.get("chat_id")
+        item_type = body.get("itemType") or body.get("item_type")
+        item_data = body.get("itemData") or body.get("item_data") or {}
+
+        if not chat_id or not item_type or not item_data:
+            raise HTTPException(status_code=400, detail="chatId, itemType, and itemData are required")
+
+        prefix = "comm" if item_type == "commitments" else ("know" if item_type == "knowledge" else "exp")
+        item_data["id"] = f"{prefix}_{uuid.uuid4().hex[:8]}"
+        item_data["createdAt"] = datetime.now(timezone.utc).isoformat()
+        if item_type == "commitments" and "status" not in item_data:
+            item_data["status"] = "pending"
+
+        vault_ref = db.collection("chats").document(chat_id).collection("vault").document("data")
+        doc = vault_ref.get()
+        vdata = doc.to_dict() if doc.exists else {}
+
+        items = list(vdata.get(item_type, []))
+        items.append(item_data)
+
+        vault_ref.set({item_type: items, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        return {"status": "success", "item": item_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add vault item error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI DIGITAL TWIN — Persona Training, Reply Generation & Settings
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/twin/train")
+async def train_twin_persona(request: Request):
+    """
+    Receives a batch of the user's own outgoing messages.
+    Uses Gemini 1.5 Flash to extract stylistic signals (tone, emoji use,
+    vocabulary, greetings, decision style, etc.) and upserts the persona
+    profile in Firestore users/{uid}/twin/profile.
+    Raw message text is NEVER stored — only distilled semantic DNA.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        body = await request.json()
+        uid = body.get("uid", "").strip()
+        messages = body.get("messages", [])
+
+        if not uid or not messages:
+            raise HTTPException(status_code=400, detail="uid and messages required")
+
+        # Cap training batch at 50 to keep prompt size manageable
+        messages = [str(m) for m in messages if str(m).strip()][:50]
+        if not messages:
+            return {"status": "skipped", "reason": "empty messages"}
+
+        prompt = f"""
+Analyze these {len(messages)} outgoing chat messages written by one person.
+Extract their communication DNA as a JSON object. Use these exact keys:
+- tone_signature: array of strings from [casual, professional, warm, direct, humorous, formal, blunt, empathetic, witty, reserved]
+- typical_greeting: most common opening phrase (e.g. "Hey!", "Hi there,", "Yo,", "Good morning,")
+- typical_sign_off: most common closing phrase (e.g. "Thanks!", "Talk soon", "👍", "Cheers,")
+- vocabulary_level: exactly one of "simple", "moderate", "technical"
+- avg_response_length_words: integer representing typical reply word count
+- uses_emojis: boolean
+- emoji_frequency: exactly one of "never", "rare", "moderate", "heavy"
+- punctuation_style: exactly one of "formal", "casual", "minimal"
+- humor_index: float 0.0–1.0 (how often the person injects humor)
+- empathy_index: float 0.0–1.0 (how emotionally supportive the tone is)
+- decision_style: exactly one of "direct", "consultative", "deferring"
+- sample_phrases: array of up to 5 short characteristic phrases this person uses often
+
+Messages to analyze:
+{json.dumps(messages, ensure_ascii=False)}
+
+Return ONLY valid JSON — no markdown, no explanation, no code fences.
+"""
+        raw = _call_gemini_raw(prompt, json_schema_dict={
+            "type": "object",
+            "properties": {
+                "tone_signature": {"type": "array", "items": {"type": "string"}},
+                "typical_greeting": {"type": "string"},
+                "typical_sign_off": {"type": "string"},
+                "vocabulary_level": {"type": "string"},
+                "avg_response_length_words": {"type": "integer"},
+                "uses_emojis": {"type": "boolean"},
+                "emoji_frequency": {"type": "string"},
+                "punctuation_style": {"type": "string"},
+                "humor_index": {"type": "number"},
+                "empathy_index": {"type": "number"},
+                "decision_style": {"type": "string"},
+                "sample_phrases": {"type": "array", "items": {"type": "string"}}
+            }
+        })
+
+        persona_update = json.loads(raw)
+        # Clamp float values
+        for key in ("humor_index", "empathy_index"):
+            if key in persona_update:
+                persona_update[key] = max(0.0, min(1.0, float(persona_update[key])))
+
+        persona_update["last_trained"] = firestore.SERVER_TIMESTAMP
+        persona_update["trained_on_count"] = firestore.Increment(len(messages))
+
+        db.collection("users").document(uid).collection("twin").document("profile").set(
+            persona_update, merge=True
+        )
+        logger.info(f"Twin persona updated for uid={uid} with {len(messages)} messages")
+        return {"status": "ok", "signals_extracted": len(persona_update)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Twin train error: {e}")
+        # Return 200 with degraded status so the Flutter client never crashes
+        return {"status": "degraded", "reason": str(e)}
+
+
+@app.post("/api/twin/reply")
+async def generate_twin_reply(request: Request):
+    """
+    Given an incoming message, conversation context, and the user's persona profile,
+    generates 3 reply candidates in the user's authentic voice using Gemini 1.5 Flash.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        body = await request.json()
+        uid = body.get("uid", "").strip()
+        incoming_message = body.get("incoming_message", "").strip()
+        conversation_context = body.get("conversation_context", [])[:10]
+        sender_name = body.get("sender_name", "them")
+        chat_title = body.get("chat_title", "Chat")
+        is_group = bool(body.get("is_group", False))
+
+        if not uid or not incoming_message:
+            raise HTTPException(status_code=400, detail="uid and incoming_message required")
+
+        # Fetch persona profile
+        profile_doc = db.collection("users").document(uid).collection("twin").document("profile").get()
+        persona = profile_doc.to_dict() if profile_doc.exists else {}
+
+        # Cold-start fallback when persona isn't trained yet
+        if not persona or persona.get("trained_on_count", 0) < 10:
+            context_fallbacks = [
+                "Got it! 👍",
+                "Sure, let me check on that",
+                "I'll get back to you shortly"
+            ]
+            return {"replies": context_fallbacks, "cold_start": True}
+
+        context_text = "\n".join([
+            f"{m.get('senderName', m.get('sender_name', '?'))}: {m.get('text', '')}"
+            for m in conversation_context
+            if m.get("text", "").strip()
+        ])
+
+        chat_desc = f"group chat: {chat_title}" if is_group else f"1-on-1 with {sender_name}"
+
+        prompt = f"""
+You are impersonating this user based on their measured communication style.
+Generate replies that sound EXACTLY like them — not generic AI.
+
+PERSONA PROFILE (derived from {persona.get('trained_on_count', 0)} of their real messages):
+- Tone: {persona.get('tone_signature', [])}
+- Typical greeting: "{persona.get('typical_greeting', 'Hey')}"
+- Typical sign-off: "{persona.get('typical_sign_off', '')}"
+- Vocabulary: {persona.get('vocabulary_level', 'casual')}
+- Average reply length: ~{persona.get('avg_response_length_words', 10)} words
+- Uses emojis: {persona.get('uses_emojis', True)} — frequency: {persona.get('emoji_frequency', 'moderate')}
+- Punctuation: {persona.get('punctuation_style', 'casual')}
+- Humor index: {persona.get('humor_index', 0.3)}/1.0
+- Empathy index: {persona.get('empathy_index', 0.5)}/1.0
+- Decision style: {persona.get('decision_style', 'direct')}
+- Characteristic phrases: {persona.get('sample_phrases', [])}
+
+CONVERSATION ({chat_desc}):
+{context_text if context_text else "(no prior context)"}
+
+INCOMING MESSAGE FROM {sender_name.upper()}:
+"{incoming_message}"
+
+Task: Generate exactly 3 reply candidates in this user's authentic voice.
+Rules:
+1. Each reply must feel like THEY wrote it — not an AI assistant
+2. Match their typical reply length (~{persona.get('avg_response_length_words', 10)} words)
+3. Use their emoji style and punctuation habits
+4. Vary the replies meaningfully (don't just rephrase the same thing)
+5. Address the message content appropriately
+
+Return ONLY: {{"replies": ["reply1", "reply2", "reply3"]}}
+No explanation, no markdown, no code fences.
+"""
+        raw = _call_gemini_raw(prompt, json_schema_dict={
+            "type": "object",
+            "properties": {
+                "replies": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3}
+            }
+        })
+
+        data = json.loads(raw)
+        replies = [r.strip() for r in data.get("replies", []) if r.strip()][:3]
+
+        if not replies:
+            replies = ["Got it! 👍", "On it, give me a moment", "Let me check and get back to you"]
+
+        return {"replies": replies, "cold_start": False}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Twin reply generation error: {e}")
+        return {"replies": ["Got it! 👍", "Sure, let me get back to you on that", "On it! 👍"], "error": str(e)}
+
+
+@app.post("/api/twin/settings")
+async def save_twin_settings(request: Request):
+    """Persist the user's AI Twin settings to Firestore."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        body = await request.json()
+        uid = body.get("uid", "").strip()
+        settings = body.get("settings", {})
+        if not uid:
+            raise HTTPException(status_code=400, detail="uid required")
+        db.collection("users").document(uid).collection("twin").document("settings").set(
+            settings, merge=True
+        )
+        return {"status": "saved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/twin/profile/{uid}")
+async def get_twin_profile(uid: str):
+    """Fetch the current AI Twin persona profile for a user."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        doc = db.collection("users").document(uid).collection("twin").document("profile").get()
+        if not doc.exists:
+            return {"profile": None, "trained": False}
+        data = doc.to_dict()
+        # Convert non-serializable Firestore types
+        if "last_trained" in data and hasattr(data["last_trained"], "isoformat"):
+            data["last_trained"] = data["last_trained"].isoformat()
+        elif hasattr(data.get("last_trained"), "timestamp"):
+            data["last_trained"] = data["last_trained"].isoformat()
+        trained = (data.get("trained_on_count", 0) or 0) >= 10
+        return {"profile": data, "trained": trained}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 

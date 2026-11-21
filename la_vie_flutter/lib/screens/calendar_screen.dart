@@ -1,6 +1,5 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../models/meeting.dart';
@@ -55,11 +54,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
             ),
           ),
 
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('meetings')
-                .where('hostId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-                .snapshots(),
+          StreamBuilder<List<Meeting>>(
+            stream: Meeting.streamUserMeetings(FirebaseAuth.instance.currentUser?.uid),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
@@ -68,11 +64,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 return const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)));
               }
 
-              final docs = snapshot.data?.docs ?? [];
-              final allMeetings = docs.map((doc) => Meeting.fromFirestore(doc)).toList();
+              final allMeetings = snapshot.data ?? [];
 
               // Filter for selected date
-              final selectedDateMeetings = allMeetings.where((m) => 
+              final selectedDateMeetings = allMeetings.where((m) =>
                 m.scheduledTime.year == _selectedDate.year &&
                 m.scheduledTime.month == _selectedDate.month &&
                 m.scheduledTime.day == _selectedDate.day

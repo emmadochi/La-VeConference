@@ -3,14 +3,19 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../api_service.dart';
 import 'login_screen.dart';
 import 'account_details_screen.dart';
 import 'notifications_screen.dart';
 import 'privacy_security_screen.dart';
 import 'settings_screen.dart';
 import 'support_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/lcm_bridge.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -21,6 +26,58 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _isUploading = false;
+  String? _avatarUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfilePhoto();
+  }
+
+  String? _normalizeAvatarUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.startsWith('/')) {
+      return '${ApiService.baseUrl}$trimmed';
+    }
+    return trimmed;
+  }
+
+  Future<void> _loadProfilePhoto() async {
+    final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
+    if (user == null) return;
+
+    final authUrl = _normalizeAvatarUrl(user.photoURL);
+    if (authUrl != null && mounted) {
+      setState(() => _avatarUrl = authUrl);
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = _normalizeAvatarUrl(prefs.getString('user_avatar_cache_${user.uid}'));
+      if (cached != null && mounted) {
+        setState(() => _avatarUrl = cached);
+      }
+
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final fsUrl = _normalizeAvatarUrl((data['photoURL'] ?? data['avatar'])?.toString());
+        if (fsUrl != null) {
+          await prefs.setString('user_avatar_cache_${user.uid}', fsUrl);
+          if (mounted) {
+            setState(() => _avatarUrl = fsUrl);
+          }
+          if (user.photoURL != fsUrl) {
+            try {
+              await user.updatePhotoURL(fsUrl);
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+  }
 
   Future<void> _logout(BuildContext context) async {
     if (Firebase.apps.isNotEmpty) {
@@ -34,13 +91,96 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _pickAndUploadImage() async {
+  void _showPhotoOptionsSheet() {
+    if (_isUploading) return;
+    final hasPhoto = _avatarUrl != null && _avatarUrl!.isNotEmpty;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F172A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF00E5FF)),
+                  title: const Text('Choose from Gallery', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    _pickAndUploadImage(ImageSource.gallery);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.camera_alt_outlined, color: Color(0xFF00E5FF)),
+                  title: const Text('Take a Photo', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    _pickAndUploadImage(ImageSource.camera);
+                  },
+                ),
+                if (hasPhoto)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    title: const Text('Remove Photo', style: TextStyle(color: Colors.redAccent)),
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      _removeProfilePhoto();
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _removeProfilePhoto() async {
+    final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
+    if (user == null) return;
+    setState(() => _isUploading = true);
+    try {
+      await user.updatePhotoURL(null);
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(
+        {'photoURL': '', 'avatar': '', 'updatedAt': DateTime.now().toIso8601String()},
+        SetOptions(merge: true),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('user_avatar_cache_${user.uid}');
+      if (mounted) {
+        setState(() => _avatarUrl = null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile photo removed.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not remove photo: ${e.toString().replaceFirst("Exception: ", "")}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
+  Future<void> _pickAndUploadImage(ImageSource source) async {
     try {
       final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
-      
+      final XFile? image = await picker.pickImage(
+        source: source,
+        imageQuality: 75,
+        maxWidth: 800,
+        maxHeight: 800,
+      );
+
       if (image == null) return; // User canceled
-      
+
       setState(() {
         _isUploading = true;
       });
@@ -49,23 +189,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
       if (user == null) return;
 
-      // Upload to Firebase Storage
-      final storageRef = FirebaseStorage.instance.ref().child('avatars/${user.uid}.jpg');
-      await storageRef.putFile(file);
+      String downloadUrl;
+      try {
+        downloadUrl = await ApiService.uploadProfilePhoto(file: file, uid: user.uid);
+      } catch (backendErr) {
+        // Fallback to Firebase Storage only if backend is unreachable on network
+        final errText = backendErr.toString().toLowerCase();
+        final isNetworkDown = errText.contains('network error') || errText.contains('socket');
+        if (!isNetworkDown) rethrow;
 
-      // Get download URL
-      final String downloadUrl = await storageRef.getDownloadURL();
+        final storageRef = FirebaseStorage.instance.ref().child('avatars/${user.uid}.jpg');
+        await storageRef.putFile(file);
+        downloadUrl = await storageRef.getDownloadURL();
+      }
 
-      // Update Auth Profile
       await user.updatePhotoURL(downloadUrl);
-      
-      // Reload user so changes reflect
       await user.reload();
 
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(
+        {
+          'photoURL': downloadUrl,
+          'avatar': downloadUrl,
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        SetOptions(merge: true),
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_avatar_cache_${user.uid}', downloadUrl);
+
+      if (mounted) {
+        setState(() => _avatarUrl = downloadUrl);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile picture updated!'),
+            backgroundColor: Color(0xFF00C853),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
+        final cleanMsg = e.toString().replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to upload image: $e')),
+          SnackBar(
+            content: Text('Failed to upload image: $cleanMsg'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
       }
     } finally {
@@ -83,7 +252,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final displayName = user?.displayName ?? 'Premium User';
     final email = user?.email ?? 'user@lavie.com';
-    final photoURL = user?.photoURL;
+    final photoURL = _avatarUrl ?? _normalizeAvatarUrl(user?.photoURL);
     final initial = displayName.isNotEmpty ? displayName.substring(0, 1).toUpperCase() : 'U';
 
     return Scaffold(
@@ -187,7 +356,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           bottom: 0,
                           right: 0,
                           child: GestureDetector(
-                            onTap: _pickAndUploadImage,
+                            onTap: _showPhotoOptionsSheet,
                             child: Container(
                               padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
@@ -233,6 +402,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 14),
                   _buildSettingOption(Icons.settings_outlined, 'App Settings', const Color(0xFFFFB300), () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
+                  }),
+                  const SizedBox(height: 14),
+                  _buildSettingOption(Icons.bug_report_outlined, 'Beta Feedback & Bug Report', const Color(0xFFFF2A6D), () {
+                    LcmBridge.showFeedbackDialog(
+                      context,
+                      packageName: 'org.lifechangerstouch.lavie',
+                      appName: 'La-Vie Enterprise',
+                      currentVersion: '1.0.1',
+                    );
+                  }),
+                  const SizedBox(height: 14),
+                  _buildSettingOption(Icons.privacy_tip_outlined, 'Privacy Policy', const Color(0xFF00E5FF), () async {
+                    final url = Uri.parse('https://la-vie.lifechangerstouch.org/privacy');
+                    try {
+                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                    } catch (e) {
+                      debugPrint('Error launching privacy policy: $e');
+                    }
+                  }),
+                  const SizedBox(height: 14),
+                  _buildSettingOption(Icons.gavel_outlined, 'Terms of Service', const Color(0xFF7000FF), () async {
+                    final url = Uri.parse('https://la-vie.lifechangerstouch.org/terms');
+                    try {
+                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                    } catch (e) {
+                      debugPrint('Error launching terms: $e');
+                    }
                   }),
                   const SizedBox(height: 32),
 

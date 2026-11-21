@@ -600,12 +600,13 @@ class _MeetingRecapSheetState extends State<_MeetingRecapSheet> {
     } catch (_) {}
   }
 
-  Future<void> _generateSummary() async {
+  Future<void> _generateSummary({String? customNotes}) async {
     setState(() => _isLoading = true);
     try {
       final res = await ApiService.generateMeetingSummary(
         roomId: widget.roomId,
         title: widget.notifData['title'] ?? 'Meeting ${widget.roomId}',
+        transcriptText: customNotes,
       );
       if (mounted && res['summary'] is Map) {
         setState(() {
@@ -623,6 +624,70 @@ class _MeetingRecapSheetState extends State<_MeetingRecapSheet> {
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _showCustomNotesPrompt() async {
+    final controller = TextEditingController();
+    final customNotes = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Color(0xFF00E5FF), width: 1.2),
+        ),
+        title: Row(
+          children: const [
+            Icon(Icons.auto_awesome, color: Color(0xFF00FFA3), size: 22),
+            SizedBox(width: 8),
+            Text('Expand Bullet Points', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Jot down any quick bullet points or decisions from your meeting. Gemini will expand them into executive minutes & action items.',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: 4,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'e.g. Budget approved, launch set for Dec, Sarah to finalize design by Friday...',
+                hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.06),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            icon: const Icon(Icons.bolt, size: 16),
+            label: const Text('Generate with AI', style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00FFA3),
+              foregroundColor: const Color(0xFF070B19),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (customNotes != null && customNotes.isNotEmpty) {
+      _generateSummary(customNotes: customNotes);
     }
   }
 
@@ -647,6 +712,10 @@ ${actions.isNotEmpty ? actions : 'N/A'}
 
 ## 📄 Discussion Notes & Transcript
 ${transcript.isNotEmpty ? transcript : 'N/A'}
+
+---
+*Generated with La-Vie Premium Conference*
+Host your next meeting with HD audio, video, and automated AI summary notes: https://la-vie.lifechangerstouch.org
 ''';
   }
 
@@ -716,7 +785,7 @@ ${transcript.isNotEmpty ? transcript : 'N/A'}
                         ],
                       ),
                       const SizedBox(height: 2),
-                      Text('Room: ${widget.roomId}', style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                      Text('$title • Room: ${widget.roomId}', style: const TextStyle(color: Colors.white60, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
@@ -761,7 +830,7 @@ ${transcript.isNotEmpty ? transcript : 'N/A'}
             ),
             const SizedBox(height: 16),
             // Actions
-            if (_aiSummary == null)
+            if (_aiSummary == null) ...[
               SizedBox(
                 width: double.infinity,
                 child: Container(
@@ -776,7 +845,7 @@ ${transcript.isNotEmpty ? transcript : 'N/A'}
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
                     label: Text(
-                      _isLoading ? 'Generating Summary with Gemini...' : 'Generate AI Minutes & Key Points',
+                      _isLoading ? 'Generating Summary with Gemini...' : 'Generate AI Minutes (Auto)',
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                     style: ElevatedButton.styleFrom(
@@ -785,11 +854,27 @@ ${transcript.isNotEmpty ? transcript : 'N/A'}
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
-                    onPressed: _isLoading ? null : _generateSummary,
+                    onPressed: _isLoading ? null : () => _generateSummary(),
                   ),
                 ),
               ),
-            if (_aiSummary == null) const SizedBox(height: 10),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.edit_note_rounded, size: 18),
+                  label: const Text('Expand My Bullet Points with AI', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF00FFA3),
+                    side: const BorderSide(color: Color(0xFF00FFA3)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: _isLoading ? null : _showCustomNotesPrompt,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             Row(
               children: [
                 Expanded(

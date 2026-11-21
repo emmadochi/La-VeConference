@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -13,6 +14,31 @@ class AlreadyInMeetingException implements Exception {
     required this.targetRoom,
     required this.message,
   });
+
+  @override
+  String toString() => message;
+}
+
+class WaitingApprovalException implements Exception {
+  final String roomId;
+  final String title;
+  final String hostName;
+  final String message;
+
+  WaitingApprovalException({
+    required this.roomId,
+    required this.title,
+    required this.hostName,
+    required this.message,
+  });
+
+  @override
+  String toString() => message;
+}
+
+class EntryDeniedException implements Exception {
+  final String message;
+  EntryDeniedException(this.message);
 
   @override
   String toString() => message;
@@ -57,6 +83,19 @@ class ApiService {
                 if (detail['error'] == 'room_locked') {
                   throw Exception(detail['message']?.toString() ?? 'This meeting has been locked by the host.');
                 }
+                if (detail['error'] == 'waiting_approval') {
+                  throw WaitingApprovalException(
+                    roomId: detail['room_id']?.toString() ?? roomName,
+                    title: detail['title']?.toString() ?? 'Private Meeting',
+                    hostName: detail['host_name']?.toString() ?? 'Host',
+                    message: detail['message']?.toString() ?? 'Waiting for host approval.',
+                  );
+                }
+                if (detail['error'] == 'entry_denied') {
+                  throw EntryDeniedException(
+                    detail['message']?.toString() ?? 'The host declined your request to join this meeting.',
+                  );
+                }
                 throw AlreadyInMeetingException(
                   activeRoom: detail['active_room']?.toString() ?? '',
                   targetRoom: detail['target_room']?.toString() ?? roomName,
@@ -73,7 +112,7 @@ class ApiService {
                 );
               }
             } catch (e) {
-              if (e is AlreadyInMeetingException) rethrow;
+              if (e is AlreadyInMeetingException || e is WaitingApprovalException || e is EntryDeniedException) rethrow;
               if (e.toString().contains('locked')) rethrow;
             }
             throw Exception('Access denied: Unable to join meeting.');
@@ -89,7 +128,7 @@ class ApiService {
         }
       } catch (e) {
         lastError = e;
-        if (e is AlreadyInMeetingException || e.toString().contains('locked')) {
+        if (e is AlreadyInMeetingException || e is WaitingApprovalException || e is EntryDeniedException || e.toString().contains('locked')) {
           rethrow;
         }
         if (attempts < maxAttempts) {
@@ -122,7 +161,7 @@ class ApiService {
     } catch (e) {
       // ignore
     }
-    return 'wss://lavie-live-bmlbvgd2.livekit.cloud';
+    return 'wss://lavie-prod-ngzo1pm2.livekit.cloud';
   }
 
   static Future<String?> startRecording(String roomName) async {
@@ -507,6 +546,361 @@ class ApiService {
       }
     } catch (e) {
       throw Exception('AI Summary Error: $e');
+    }
+  }
+
+  static Future<bool> submitMeetingFeedback({
+    required String roomId,
+    required int rating,
+    List<String> tags = const [],
+    String comment = '',
+    String wouldRecommend = 'yes',
+  }) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/meeting/feedback'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({
+          'room_id': roomId,
+          'rating': rating,
+          'tags': tags,
+          'comment': comment,
+          'would_recommend': wouldRecommend,
+          'user_id': user?.uid ?? 'anonymous',
+          'user_name': user?.displayName ?? 'User',
+        }),
+      ).timeout(requestTimeout);
+
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Fetches safe public metadata for a scheduled meeting (supports upcoming invite lobby).
+  static Future<Map<String, dynamic>?> fetchPublicMeetingInfo(String roomId) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      if (cleanId.isEmpty) return null;
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/meeting/${Uri.encodeComponent(cleanId)}/info'),
+        headers: {
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Subscribes an invitee/user to server FCM push reminders and bookmarks the meeting.
+  static Future<bool> subscribeMeetingReminder(
+    String roomId, {
+    int reminderMinutes = 15,
+    String? fcmToken,
+  }) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return false;
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/meeting/${Uri.encodeComponent(cleanId)}/reminder'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({
+          'reminderMinutes': reminderMinutes,
+          if (fcmToken != null && fcmToken.isNotEmpty) 'fcmToken': fcmToken,
+        }),
+      ).timeout(requestTimeout);
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Removes a user's reminder subscription and saved meeting bookmark.
+  static Future<bool> unsubscribeMeetingReminder(String roomId) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return false;
+
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/meeting/${Uri.encodeComponent(cleanId)}/reminder'),
+        headers: {
+          'Authorization': 'Bearer $authToken',
+        },
+      ).timeout(requestTimeout);
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sends a knock request to enter a private meeting's waiting room.
+  static Future<String> knockRoom(String roomId) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return 'pending';
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/room/${Uri.encodeComponent(cleanId)}/knock'),
+        headers: {'Authorization': 'Bearer $authToken'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['status']?.toString() ?? 'pending';
+      }
+      return 'pending';
+    } catch (_) {
+      return 'pending';
+    }
+  }
+
+  /// Polls the current waiting-room status ('pending', 'admitted', 'denied', 'locked', 'open').
+  static Future<String> checkKnockStatus(String roomId) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return 'pending';
+
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/room/${Uri.encodeComponent(cleanId)}/knock-status'),
+        headers: {'Authorization': 'Bearer $authToken'},
+      ).timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['status']?.toString() ?? 'pending';
+      }
+      return 'pending';
+    } catch (_) {
+      return 'pending';
+    }
+  }
+
+  /// Host-only: fetches pending guests waiting for admission.
+  static Future<List<Map<String, dynamic>>> fetchWaitingRoomGuests(String roomId) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return [];
+
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/room/${Uri.encodeComponent(cleanId)}/waiting-room'),
+        headers: {'Authorization': 'Bearer $authToken'},
+      ).timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final list = data['waiting'] as List? ?? [];
+        return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Host-only: admit, deny, or admit_all waiting room guests.
+  static Future<bool> decideWaitingGuest(String roomId, String targetUid, String action) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return false;
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/room/${Uri.encodeComponent(cleanId)}/waiting-room/decision'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({
+          'target_uid': targetUid,
+          'action': action,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Host-only: toggles Private Waiting Room requirement on an active meeting.
+  static Future<bool> toggleWaitingRoom(String roomId, bool enabled) async {
+    try {
+      final cleanId = roomId.split('#').first.trim();
+      final user = FirebaseAuth.instance.currentUser;
+      final authToken = await user?.getIdToken();
+      if (authToken == null) return false;
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/room/waiting-room/toggle'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({
+          'room_id': cleanId,
+          'enabled': enabled,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Uploads a user's profile avatar to the backend `/api/profile/upload` endpoint
+  /// with explicit image MIME headers and structured error handling.
+  static Future<String> uploadProfilePhoto({
+    required File file,
+    required String uid,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    final authToken = await user?.getIdToken();
+    if (authToken == null) {
+      throw Exception('Please log in again before updating your profile photo.');
+    }
+
+    final rawName = file.path.split(Platform.pathSeparator).last;
+    final lowerExt = rawName.contains('.') ? rawName.split('.').last.toLowerCase() : 'jpg';
+    final subtype = (lowerExt == 'jpg' || lowerExt == 'jpeg')
+        ? 'jpeg'
+        : (['png', 'webp', 'gif'].contains(lowerExt) ? lowerExt : 'jpeg');
+    final safeName = 'avatar_$uid.$lowerExt';
+
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
+    );
+
+    final formData = FormData.fromMap({
+      'uid': uid,
+      'file': await MultipartFile.fromFile(
+        file.path,
+        filename: safeName,
+        contentType: DioMediaType('image', subtype),
+      ),
+    });
+
+    try {
+      final response = await dio.post(
+        '$baseUrl/api/profile/upload',
+        data: formData,
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final data = response.data;
+      if (data is Map && data['success'] == true && data['url'] != null) {
+        final rawUrl = data['url'].toString();
+        return rawUrl.startsWith('http') ? rawUrl : '$baseUrl$rawUrl';
+      }
+      throw Exception('Server did not return a valid image URL.');
+    } on DioException catch (e) {
+      final respData = e.response?.data;
+      String message = 'Unable to upload profile photo. Please try again.';
+      if (respData is Map && respData['detail'] != null) {
+        message = respData['detail'].toString();
+      } else if (e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.connectionError) {
+        message = 'Network error while uploading photo. Check your internet connection.';
+      } else if (e.message != null && e.message!.isNotEmpty) {
+        message = e.message!;
+      }
+      throw Exception(message);
+    }
+  }
+
+  /// Sends a 6-digit email verification OTP before creating a new user account.
+  static Future<void> sendSignupOtp({
+    required String email,
+    required String displayName,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/auth/send-signup-otp'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email.trim(),
+        'display_name': displayName.trim(),
+      }),
+    ).timeout(requestTimeout);
+
+    if (response.statusCode != 200) {
+      String msg = 'Failed to send verification code.';
+      try {
+        final data = jsonDecode(response.body);
+        if (data is Map && data['detail'] != null) {
+          msg = data['detail'].toString();
+        }
+      } catch (_) {}
+      throw Exception(msg);
+    }
+  }
+
+  /// Verifies the 6-digit signup OTP and creates the verified user account.
+  static Future<void> verifySignupOtp({
+    required String email,
+    required String otp,
+    required String password,
+    required String displayName,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/auth/verify-signup-otp'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email.trim(),
+        'otp': otp.trim(),
+        'password': password,
+        'display_name': displayName.trim(),
+      }),
+    ).timeout(requestTimeout);
+
+    if (response.statusCode != 200) {
+      String msg = 'Verification failed.';
+      try {
+        final data = jsonDecode(response.body);
+        if (data is Map && data['detail'] != null) {
+          msg = data['detail'].toString();
+        }
+      } catch (_) {}
+      throw Exception(msg);
     }
   }
 }

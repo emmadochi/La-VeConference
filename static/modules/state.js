@@ -12,7 +12,7 @@ export const state = {
     isScreenSharing: false,
     currentFacingMode: 'user',
     pinnedWrapperId: null,
-    livekitUrlFallback: "wss://lavie-live-bmlbvgd2.livekit.cloud",
+    livekitUrlFallback: "wss://lavie-prod-ngzo1pm2.livekit.cloud",
     isAdmin: false,
     isHost: false,
 

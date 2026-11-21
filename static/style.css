@@ -4407,30 +4407,105 @@ body.is-native-app .hero-section h1 {
 
 .more-drawer {
     position: fixed;
-    bottom: 90px;
+    bottom: 86px;
     left: 50%;
-    transform: translateX(-50%) translateY(20px);
-    width: min(480px, 94vw);
-    background: rgba(13, 17, 38, 0.96);
-    backdrop-filter: blur(28px);
-    -webkit-backdrop-filter: blur(28px);
-    border: 1px solid var(--glass-border);
+    transform: translateX(-50%) translateY(16px);
+    width: min(440px, 94vw);
+    max-height: min(540px, calc(100vh - 104px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: rgba(13, 17, 36, 0.96);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 20px;
-    padding: 18px 16px 20px;
+    padding: 12px 14px 16px;
     z-index: 99990;
-    box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.04);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255,255,255,0.06);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.22s ease, transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: opacity 0.22s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
 .more-drawer.open {
     opacity: 1;
     pointer-events: auto;
     transform: translateX(-50%) translateY(0);
+}
+
+.more-drawer::-webkit-scrollbar {
+    width: 5px;
+}
+
+.more-drawer::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.more-drawer::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+}
+
+.more-drawer::-webkit-scrollbar-thumb:hover {
+    background: var(--primary, #00e5ff);
+}
+
+.drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 8px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    position: sticky;
+    top: -12px;
+    background: rgba(13, 17, 36, 0.98);
+    backdrop-filter: blur(16px);
+    z-index: 10;
+    margin: -4px -6px 2px -6px;
+    border-radius: 14px 14px 0 0;
+}
+
+.drawer-header-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.drawer-header-title .material-symbols-outlined {
+    font-size: 18px;
+    color: var(--primary, #00e5ff);
+}
+
+.drawer-close-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+
+.drawer-close-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+}
+
+.drawer-close-btn .material-symbols-outlined {
+    font-size: 15px;
 }
 
 .drawer-group {
@@ -4686,28 +4761,33 @@ body.is-native-app .hero-section h1 {
 }
 
 /* Sidebar icon tooltip on hover (collapsed state) */
-.left-sidebar:not(.expanded) .sidebar-nav-btn::after {
-    content: attr(title);
+.left-sidebar:not(.expanded) .sidebar-nav-btn[data-tooltip]::after {
+    content: attr(data-tooltip);
     position: absolute;
-    left: calc(100% + 12px);
+    left: calc(100% + 14px);
     top: 50%;
     transform: translateY(-50%);
-    background: rgba(13, 17, 38, 0.97);
-    color: var(--text);
+    background: rgba(15, 23, 42, 0.96);
+    color: #f8fafc;
     font-size: 0.78rem;
-    font-weight: 500;
-    padding: 5px 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 6px 12px;
     border-radius: 8px;
     white-space: nowrap;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.15s ease;
-    border: 1px solid var(--glass-border);
-    z-index: 9999;
+    transform-origin: left center;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.65), 0 0 15px rgba(0, 229, 255, 0.15);
+    backdrop-filter: blur(14px);
+    z-index: 99999;
 }
 
 .left-sidebar:not(.expanded) .sidebar-nav-btn:hover::after {
     opacity: 1;
+    transform: translateY(-50%) translateX(2px);
 }
 
 /* Meeting info top bar — mobile pill */
@@ -4970,3 +5050,718 @@ body.is-native-app .hero-section h1 {
         min-width: 240px;
     }
 }
+
+/* ==========================================
+   ENTERPRISE IN-CALL REDESIGN BLUEPRINT (HICK'S LAW & ERGONOMICS)
+   ========================================== */
+
+/* 1. Full Viewport App Shell */
+body.in-call {
+    overflow: hidden !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    width: 100vw !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #08090d !important;
+}
+
+body.in-call .container {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+}
+
+/* 2. Sleek In-Call Header */
+body.in-call .top-nav {
+    height: 58px !important;
+    min-height: 58px !important;
+    padding: 0 24px !important;
+    margin: 0 !important;
+    background: rgba(13, 15, 23, 0.92) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    z-index: 100 !important;
+}
+
+body.in-call #themeToggleBtn,
+body.in-call #openSupportBtn,
+body.in-call .landing-page,
+body.in-call .meeting-info-top {
+    display: none !important;
+}
+
+.logo-text-muted {
+    font-weight: 400;
+    opacity: 0.65;
+    font-size: 0.9em;
+}
+
+/* In-Call Header Pill Container */
+.header-meeting-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: 20px;
+    padding-left: 18px;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.header-room-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    font-family: 'SF Mono', 'Roboto Mono', Menlo, monospace;
+}
+
+.header-room-pill .pill-icon {
+    font-size: 16px;
+    color: var(--primary, #00d4ff);
+}
+
+.header-timer-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 212, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.22);
+    padding: 5px 12px;
+    border-radius: 20px;
+    color: var(--primary, #00d4ff);
+    font-family: 'Inter', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.header-timer-pill .timer-icon {
+    font-size: 16px;
+}
+
+.header-network-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    padding: 5px 10px;
+    border-radius: 20px;
+    color: #4ade80;
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.network-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+    animation: networkPulse 2s infinite;
+}
+
+@keyframes networkPulse {
+    0% { transform: scale(0.95); opacity: 0.8; }
+    50% { transform: scale(1.3); opacity: 1; }
+    100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.in-call-invite-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 212, 255, 0.12);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 0.82rem;
+    padding: 6px 14px;
+    border-radius: 18px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.in-call-invite-btn:hover {
+    background: rgba(0, 212, 255, 0.22);
+    border-color: rgba(0, 212, 255, 0.5);
+    transform: translateY(-1px);
+}
+
+/* 3. Main Stage Layout */
+body.in-call .app-layout {
+    flex: 1 !important;
+    height: calc(100vh - 58px) !important;
+    height: calc(100dvh - 58px) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    position: relative !important;
+    overflow: hidden !important;
+    display: flex !important;
+}
+
+body.in-call .main-column {
+    flex: 1 !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 16px 20px 94px 20px !important; /* bottom padding reserves room for dock */
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    gap: 0 !important;
+}
+
+body.in-call .video-grid {
+    flex: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: grid !important;
+    gap: 16px !important;
+    place-items: center !important;
+    align-content: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
+}
+
+body.in-call .video-wrapper {
+    position: relative !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    border-radius: 18px !important;
+    overflow: hidden !important;
+    background: #0b0c13 !important;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Video muted state hides blank video stream and reveals avatar */
+.video-wrapper.video-muted video,
+.video-wrapper.video-off video {
+    display: none !important;
+}
+
+.video-wrapper.video-muted .avatar-placeholder,
+.video-wrapper.video-off .avatar-placeholder {
+    display: flex !important;
+}
+
+/* 4. Avatar & Solo Invite Card (Google Meet / Zoom 10/10 Luxury Parity) */
+.avatar-placeholder {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, rgba(0, 229, 255, 0.12) 0%, #0d111d 60%, #070910 100%);
+    z-index: 2;
+    transition: opacity 0.25s ease;
+}
+
+.avatar-circle {
+    width: 112px;
+    height: 112px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #00e5ff 0%, #0284c7 50%, #1e1b4b 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-size: 2.6rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    position: relative;
+    box-shadow: 0 16px 40px rgba(0, 229, 255, 0.35), 0 0 0 2px rgba(255, 255, 255, 0.15);
+    user-select: none;
+}
+
+/* Pulsing concentric rings on speaking */
+.avatar-pulse-ring,
+.avatar-pulse-ring-outer {
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid var(--primary, #00e5ff);
+    opacity: 0;
+    transform: scale(0.96);
+    pointer-events: none;
+    transition: all 0.25s ease;
+}
+
+.avatar-pulse-ring-outer {
+    inset: -14px;
+    border-width: 1.5px;
+    border-color: rgba(0, 229, 255, 0.5);
+}
+
+.video-wrapper.speaking .avatar-pulse-ring {
+    opacity: 0.9;
+    animation: speakingPulseInner 1.4s cubic-bezier(0.1, 0.7, 0.1, 1) infinite;
+}
+
+.video-wrapper.speaking .avatar-pulse-ring-outer {
+    opacity: 0.6;
+    animation: speakingPulseOuter 1.4s cubic-bezier(0.1, 0.7, 0.1, 1) infinite 0.25s;
+}
+
+@keyframes speakingPulseInner {
+    0% { transform: scale(0.96); opacity: 0.9; }
+    50% { transform: scale(1.16); opacity: 0.4; }
+    100% { transform: scale(1.3); opacity: 0; }
+}
+
+@keyframes speakingPulseOuter {
+    0% { transform: scale(0.98); opacity: 0.6; }
+    50% { transform: scale(1.28); opacity: 0.25; }
+    100% { transform: scale(1.48); opacity: 0; }
+}
+
+.avatar-info-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.avatar-name {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    letter-spacing: 0.3px;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.avatar-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    backdrop-filter: blur(8px);
+    transition: all 0.2s ease;
+}
+
+.avatar-status-pill .material-symbols-outlined {
+    font-size: 14px;
+}
+
+.avatar-status-pill.pill-muted,
+.video-wrapper.audio-muted .avatar-status-pill {
+    background: rgba(239, 68, 68, 0.15) !important;
+    border-color: rgba(239, 68, 68, 0.35) !important;
+    color: #f87171 !important;
+}
+
+.avatar-status-pill.speaking-pill {
+    background: rgba(0, 229, 255, 0.2) !important;
+    border-color: rgba(0, 229, 255, 0.6) !important;
+    color: #00e5ff !important;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
+}
+
+/* Solo Invite Card (Google Meet Parity Empty State) */
+.solo-invite-card {
+    position: absolute !important;
+    bottom: 96px !important;
+    left: 24px !important;
+    transform: none !important;
+    background: rgba(13, 17, 30, 0.92) !important;
+    border: 1px solid rgba(0, 229, 255, 0.25) !important;
+    border-radius: 20px !important;
+    padding: 22px 24px !important;
+    text-align: left !important;
+    backdrop-filter: blur(32px) !important;
+    -webkit-backdrop-filter: blur(32px) !important;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 35px rgba(0, 229, 255, 0.12) !important;
+    max-width: 410px !important;
+    width: calc(100% - 48px) !important;
+    z-index: 100 !important;
+    animation: soloCardSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes soloCardSlideUp {
+    from {
+        opacity: 0;
+        transform: translateY(16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.solo-close-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+}
+
+.solo-close-btn .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.solo-close-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    transform: scale(1.05);
+}
+
+.solo-card-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding-right: 28px;
+}
+
+.solo-card-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.2) 0%, rgba(2, 132, 199, 0.2) 100%);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    color: var(--primary, #00e5ff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.solo-card-icon .material-symbols-outlined {
+    font-size: 24px;
+}
+
+.solo-card-titles h3 {
+    margin: 0 0 3px 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.2px;
+}
+
+.solo-card-titles p {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #94a3b8;
+    line-height: 1.35;
+}
+
+.solo-invite-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.solo-code-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-family: 'SF Mono', 'Roboto Mono', Menlo, monospace;
+    font-size: 0.88rem;
+    letter-spacing: 0.4px;
+    color: #cbd5e1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.solo-code-chip .chip-icon {
+    font-size: 16px;
+    color: var(--primary, #00e5ff);
+}
+
+.solo-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.solo-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: linear-gradient(135deg, #00e5ff 0%, #0088cc 100%);
+    color: #050505;
+    border: none;
+    box-shadow: 0 6px 18px rgba(0, 229, 255, 0.3);
+    transition: all 0.2s ease;
+}
+
+.solo-copy-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(0, 229, 255, 0.45);
+}
+
+.solo-copy-btn .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.solo-share-whatsapp-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(37, 211, 102, 0.15);
+    border: 1px solid rgba(37, 211, 102, 0.4);
+    color: #25d366;
+    transition: all 0.2s ease;
+}
+
+.solo-share-whatsapp-btn:hover {
+    background: rgba(37, 211, 102, 0.25);
+    transform: translateY(-1px);
+}
+
+.solo-share-whatsapp-btn .material-symbols-outlined {
+    font-size: 16px;
+}
+
+/* Video Wrapper Floating Name Label (Google Meet Style) */
+.video-wrapper .label {
+    position: absolute !important;
+    bottom: 12px !important;
+    left: 12px !important;
+    background: rgba(10, 12, 20, 0.72) !important;
+    backdrop-filter: blur(10px) !important;
+    -webkit-backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    padding: 4px 10px !important;
+    border-radius: 8px !important;
+    font-size: 0.8rem !important;
+    font-weight: 500 !important;
+    color: #f1f5f9 !important;
+    letter-spacing: 0.2px !important;
+    z-index: 10 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+.video-wrapper.audio-muted .label::after {
+    content: "mic_off";
+    font-family: 'Material Symbols Outlined';
+    font-size: 14px;
+    color: #f87171;
+    margin-left: 2px;
+}
+
+/* 5. Bottom Control Dock (Hick's Law Consolidated) */
+.media-controls-v2 {
+    position: fixed !important;
+    bottom: 22px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 8px 18px !important;
+    background: rgba(14, 16, 26, 0.92) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 28px !important;
+    backdrop-filter: blur(30px) !important;
+    -webkit-backdrop-filter: blur(30px) !important;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+    z-index: 9999 !important;
+    max-width: calc(100vw - 32px) !important;
+    overflow: visible !important;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.controls-divider {
+    width: 1px;
+    height: 28px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 0 4px;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.control-btn {
+    display: inline-flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 2px !important;
+    width: 52px !important;
+    height: 52px !important;
+    min-width: 52px !important;
+    padding: 0 !important;
+    border-radius: 14px !important;
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: #e2e8f0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    cursor: pointer !important;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1) !important;
+    position: relative !important;
+}
+
+.control-btn .material-symbols-outlined {
+    font-size: 22px !important;
+}
+
+.control-btn .btn-subtext {
+    font-size: 0.65rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.2px !important;
+    opacity: 0.85 !important;
+    margin-top: -1px !important;
+    white-space: nowrap !important;
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.14) !important;
+    color: #ffffff !important;
+    transform: translateY(-2px) !important;
+}
+
+.control-btn.active {
+    background: rgba(255, 255, 255, 0.1) !important;
+    color: #ffffff !important;
+}
+
+/* Red alert state when mic is muted or camera is off */
+.control-btn.muted-off,
+.control-btn.active-off {
+    background: rgba(239, 68, 68, 0.18) !important;
+    border-color: rgba(239, 68, 68, 0.35) !important;
+    color: #f87171 !important;
+}
+
+.control-btn.muted-off .material-symbols-outlined,
+.control-btn.active-off .material-symbols-outlined {
+    color: #f87171 !important;
+}
+
+/* Red Danger Leave Button */
+.control-btn.leave-btn {
+    background: #dc2626 !important;
+    border-color: #ef4444 !important;
+    color: #ffffff !important;
+    width: 68px !important;
+    border-radius: 16px !important;
+    margin-left: 2px !important;
+}
+
+.control-btn.leave-btn:hover {
+    background: #b91c1c !important;
+    border-color: #dc2626 !important;
+    transform: translateY(-2px) scale(1.02) !important;
+    box-shadow: 0 8px 24px rgba(220, 38, 38, 0.45) !important;
+}
+
+.control-btn.leave-btn .material-symbols-outlined {
+    color: #ffffff !important;
+}
+
+/* Dock Notification & Count Badges */
+.dock-badge {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    background: var(--primary, #00d4ff);
+    color: #050505;
+    font-size: 0.65rem;
+    font-weight: 700;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Right Panel Drawer inside Call */
+body.in-call .right-panel-container {
+    height: 100% !important;
+    background: #0f111a !important;
+    border-left: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+@media (max-width: 768px) {
+    .header-meeting-info {
+        display: none !important;
+    }
+    .media-controls-v2 {
+        bottom: 14px !important;
+        gap: 6px !important;
+        padding: 6px 12px !important;
+    }
+    .control-btn {
+        width: 44px !important;
+        height: 44px !important;
+        min-width: 44px !important;
+    }
+    .control-btn .btn-subtext {
+        display: none !important;
+    }
+    .controls-divider {
+        display: none !important;
+    }
+}
+

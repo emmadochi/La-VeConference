@@ -17,21 +17,33 @@ MEDIA_TTL_DAYS = int(os.getenv("MEDIA_TTL_DAYS", "30"))
 RECORDINGS_TTL_DAYS = int(os.getenv("RECORDINGS_TTL_DAYS", "7"))
 
 # ── Upload guards ─────────────────────────────────────────────────────────────
-# Maximum allowed file size for any upload (default 50 MB).
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+# Maximum allowed file size for any upload (default 100 MB).
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 # MIME types accepted for chat media uploads.
 ALLOWED_CHAT_MIME = {
     # Images
-    "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "image/heif",
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "image/heif", "image/svg+xml",
     # Video
     "video/mp4", "video/quicktime", "video/x-matroska", "video/webm", "video/3gpp", "video/3gp", "video/avi", "video/mpeg",
     # Audio
     "audio/mpeg", "audio/ogg", "audio/wav", "audio/aac", "audio/mp4", "audio/webm",
     "audio/x-m4a", "audio/m4a",
-    # Documents
+    # Documents & Office
     "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/plain", "text/csv", "application/rtf", "application/json", "application/xml",
+    # Archives & Packages
+    "application/zip", "application/x-zip-compressed",
+    "application/x-rar-compressed", "application/vnd.rar",
+    "application/x-7z-compressed", "application/x-tar", "application/gzip",
+    "application/vnd.android.package-archive",
     # Fallback binary stream (validated with filename extension)
     "application/octet-stream",
 }
@@ -43,8 +55,8 @@ ALLOWED_PROFILE_MIME = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Per-user quota & disk guard ───────────────────────────────────────────────
-# Max total bytes a single user can have in uploads/media/ (default 200 MB).
-USER_QUOTA_MB = int(os.getenv("USER_QUOTA_MB", "200"))
+# Max total bytes a single user can have in uploads/media/ (default 1000 MB / 1 GB).
+USER_QUOTA_MB = int(os.getenv("USER_QUOTA_MB", "1000"))
 USER_QUOTA_BYTES = USER_QUOTA_MB * 1024 * 1024
 
 # Minimum free disk space required before accepting any upload (default 500 MB).

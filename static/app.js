@@ -38,7 +38,8 @@ import {
     toggleWrapperFullscreen, 
     updateVideoGridClass,
     muteParticipant,
-    kickParticipant 
+    kickParticipant,
+    syncLocalMediaUI 
 } from "./modules/webrtc.js";
 import { openGreenRoom, closeGreenRoom } from "./modules/greenroom.js";
 import { getAuthToken } from "./auth.js";
@@ -102,15 +103,21 @@ const whiteboardContainer = document.getElementById('whiteboardContainer');
 // ==========================================
 // BOOTSTRAP & INITIALIZATION
 // ==========================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initDeviceListeners();
     initChatListeners();
     initPollsAndQaListeners();
 
-
-    // URL parameter parsing (?room=...)
+    // URL parameter parsing (?room=...) OR path (/meeting/{id}, /room/{id})
     const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
+    let roomParam = params.get('room');
+    if (!roomParam) {
+        const parts = window.location.pathname.split('/').filter(Boolean);
+        if (parts.length >= 2 && ['meeting', 'room', 'conf'].includes(parts[0])) {
+            roomParam = parts[1];
+        }
+    }
+
     if (roomParam) {
         if (roomIdInput) {
             roomIdInput.value = roomParam;
@@ -119,9 +126,169 @@ document.addEventListener('DOMContentLoaded', () => {
                 joinBtn.classList.add('active');
             }
         }
-        initiateJoinFlow(roomParam);
+        await checkAndPresentScheduledLobby(roomParam);
     }
 });
+
+function buildGoogleCalendarTemplateUrl(title, startMs, roomUrl) {
+    const start = new Date(startMs);
+    const end = new Date(startMs + 60 * 60 * 1000);
+    const fmt = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const q = new URLSearchParams({
+        action: 'TEMPLATE',
+        text: title || 'La-Vie Conference Meeting',
+        dates: `${fmt(start)}/${fmt(end)}`,
+        details: `Join La-Vie Conference:\n${roomUrl}\n\nThis meeting is End-to-End Encrypted.`,
+        location: roomUrl,
+    });
+    return `https://calendar.google.com/calendar/render?${q.toString()}`;
+}
+
+async function checkAndPresentScheduledLobby(roomId) {
+    try {
+        const cleanId = roomId.split('#')[0].trim();
+        const fbToken = window.getAuthToken ? await window.getAuthToken().catch(() => null) : null;
+        const headers = fbToken ? { 'Authorization': `Bearer ${fbToken}` } : {};
+        const resp = await fetch(`/api/meeting/${encodeURIComponent(cleanId)}/info`, { headers });
+        if (resp.ok) {
+            const info = await resp.json();
+            if (info && info.isFutureScheduled && info.scheduledTimeTs) {
+                showWebUpcomingInviteModal(info, cleanId);
+                return;
+            }
+        }
+    } catch (e) {
+        console.warn('Scheduled lobby lookup skipped:', e);
+    }
+    initiateJoinFlow(roomId);
+}
+
+function showWebUpcomingInviteModal(info, cleanRoomId) {
+    const existing = document.getElementById('webUpcomingInviteOverlay');
+    if (existing) existing.remove();
+
+    const schedMs = info.scheduledTimeTs * 1000;
+    const schedDate = new Date(schedMs);
+    const fullUrl = window.location.href;
+    const calUrl = buildGoogleCalendarTemplateUrl(info.title, schedMs, fullUrl);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'webUpcomingInviteOverlay';
+    overlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 99990;
+        background: rgba(7, 11, 25, 0.85); backdrop-filter: blur(16px);
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+    `;
+
+    overlay.innerHTML = `
+        <div style="
+            max-width: 440px; width: 100%; background: rgba(15, 23, 42, 0.96);
+            border: 1px solid rgba(0, 229, 255, 0.35); border-radius: 24px;
+            padding: 28px; color: #fff; box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+            font-family: 'Inter', sans-serif; text-align: center;
+        ">
+            <div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:rgba(0,229,255,0.12);color:#00E5FF;font-size:12px;font-weight:700;margin-bottom:14px;">
+                <span>UPCOMING SCHEDULED MEETING</span>
+            </div>
+            <h2 style="margin:0 0 8px 0;font-size:22px;font-weight:700;">${(info.title || 'La-Vie Conference').replace(/</g, '&lt;')}</h2>
+            <p style="margin:0 0 16px 0;color:rgba(255,255,255,0.65);font-size:13.5px;">
+                Hosted by <strong style="color:#fff;">${(info.hostName || 'La-Vie Host').replace(/</g, '&lt;')}</strong>
+            </p>
+            <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:16px;margin-bottom:20px;">
+                <div style="font-size:14px;color:rgba(255,255,255,0.85);margin-bottom:6px;">
+                    ${schedDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} • ${schedDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div id="webInviteCountdown" style="font-size:24px;font-weight:800;color:#00FFA3;letter-spacing:1px;">--:--</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="webReminderSelect" style="flex:1;background:#1e293b;color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:12px;padding:10px 12px;font-size:13px;">
+                        <option value="15">Remind 15 mins before</option>
+                        <option value="30">Remind 30 mins before</option>
+                        <option value="60">Remind 1 hour before</option>
+                        <option value="0">Remind at start time</option>
+                    </select>
+                    <button id="webSetReminderBtn" style="background:#00E5FF;color:#070B19;border:none;border-radius:12px;padding:11px 16px;font-weight:700;font-size:13px;cursor:pointer;">
+                        🔔 Set Push Reminder
+                    </button>
+                </div>
+                <a href="${calUrl}" target="_blank" rel="noopener" style="
+                    display:flex;align-items:center;justify-content:center;gap:8px;
+                    background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.18);
+                    border-radius:12px;padding:12px;font-weight:600;font-size:14px;text-decoration:none;
+                ">
+                    📅 Add to Google Calendar
+                </a>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button id="webCloseInviteBtn" style="flex:1;background:transparent;color:rgba(255,255,255,0.6);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:11px;font-weight:600;cursor:pointer;">
+                    Dismiss
+                </button>
+                <button id="webEnterEarlyBtn" style="flex:2;background:rgba(0,255,163,0.16);color:#00FFA3;border:1px solid rgba(0,255,163,0.4);border-radius:12px;padding:11px;font-weight:700;cursor:pointer;">
+                    Enter Waiting Stage
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const countdownEl = document.getElementById('webInviteCountdown');
+    const tick = () => {
+        const diffSec = Math.max(0, Math.floor((schedMs - Date.now()) / 1000));
+        if (diffSec === 0) {
+            if (countdownEl) countdownEl.textContent = 'Starting Now!';
+            clearInterval(timer);
+            return;
+        }
+        const h = Math.floor(diffSec / 3600);
+        const m = Math.floor((diffSec % 3600) / 60);
+        const s = diffSec % 60;
+        const pad = (n) => String(n).padStart(2, '0');
+        if (countdownEl) {
+            countdownEl.textContent = h > 0 ? `Starts in ${h}h ${pad(m)}m ${pad(s)}s` : `Starts in ${pad(m)}m ${pad(s)}s`;
+        }
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+
+    document.getElementById('webCloseInviteBtn').onclick = () => {
+        clearInterval(timer);
+        overlay.remove();
+    };
+    document.getElementById('webEnterEarlyBtn').onclick = () => {
+        clearInterval(timer);
+        overlay.remove();
+        initiateJoinFlow(cleanRoomId);
+    };
+    document.getElementById('webSetReminderBtn').onclick = async () => {
+        const mins = parseInt(document.getElementById('webReminderSelect').value || '15', 10);
+        const user = window.firebaseAuth && window.firebaseAuth.currentUser;
+        if (!user) {
+            showToast('Please log in so we can send you a push reminder.');
+            if (window.openAuthModal) window.openAuthModal(true);
+            return;
+        }
+        try {
+            const token = await getAuthToken();
+            const r = await fetch(`/api/meeting/${encodeURIComponent(cleanRoomId)}/reminder`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
+                body: JSON.stringify({ reminderMinutes: mins })
+            });
+            if (r.ok) {
+                showToast(`🔔 Push reminder set for ${mins === 0 ? 'start time' : mins + ' mins before'}!`);
+                document.getElementById('webSetReminderBtn').textContent = '✓ Reminder Set';
+            } else {
+                showToast('Could not save reminder. Please try again.', true);
+            }
+        } catch (err) {
+            showToast('Network error saving reminder.', true);
+        }
+    };
+}
 
 // Join Button Enable/Disable
 if (roomIdInput && joinBtn) {
@@ -321,36 +488,60 @@ window.addEventListener('authStateChanged', (e) => {
 // ==========================================
 // MEDIA CONTROLS
 // ==========================================
+let _isTogglingMic = false;
+let _isTogglingVideo = false;
+
 if (toggleMicBtn) {
     toggleMicBtn.addEventListener('click', async () => {
-        if (!state.currentRoom) return;
-        state.isMicEnabled = !state.isMicEnabled;
-        if (state.isMicEnabled) {
-            await state.currentRoom.localParticipant.setMicrophoneEnabled(true, undefined, { dtx: true });
-        } else {
-            await state.currentRoom.localParticipant.setMicrophoneEnabled(false);
+        const lp = state.currentRoom?.localParticipant;
+        if (!lp || _isTogglingMic) return;
+        _isTogglingMic = true;
+        toggleMicBtn.disabled = true;
+        try {
+            const micPub = lp.getTrackPublication(Track.Source.Microphone);
+            const currentlyLive = Boolean(lp.isMicrophoneEnabled && micPub && !micPub.isMuted);
+            const targetEnable = !currentlyLive;
+            if (targetEnable) {
+                const micOpts = state.activeAudioInputDeviceId ? { deviceId: state.activeAudioInputDeviceId } : true;
+                await lp.setMicrophoneEnabled(true, micOpts, { dtx: true });
+            } else {
+                await lp.setMicrophoneEnabled(false);
+            }
+        } catch (err) {
+            console.warn("Microphone toggle failed:", err);
+            showToast("Could not toggle microphone. Check browser permissions.", true);
+        } finally {
+            syncLocalMediaUI();
+            _isTogglingMic = false;
+            toggleMicBtn.disabled = false;
         }
-        toggleMicBtn.classList.toggle('active', state.isMicEnabled);
-        const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
-        const text = toggleMicBtn.querySelector('.btn-text');
-        if (icon) icon.textContent = state.isMicEnabled ? 'mic' : 'mic_off';
-        if (text) text.textContent = state.isMicEnabled ? 'Mute' : 'Unmute';
     });
 }
 
 if (toggleVideoBtn) {
     toggleVideoBtn.addEventListener('click', async () => {
-        if (!state.currentRoom) return;
-        state.isVideoEnabled = !state.isVideoEnabled;
-        await state.currentRoom.localParticipant.setCameraEnabled(state.isVideoEnabled);
-        toggleVideoBtn.classList.toggle('active', state.isVideoEnabled);
-        const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
-        const text = toggleVideoBtn.querySelector('.btn-text');
-        if (icon) icon.textContent = state.isVideoEnabled ? 'videocam' : 'videocam_off';
-        if (text) text.textContent = state.isVideoEnabled ? 'Hide' : 'Show';
-        
-        const localWrapper = document.getElementById('wrapper-local-camera');
-        if (localWrapper) localWrapper.classList.toggle('video-muted', !state.isVideoEnabled);
+        const lp = state.currentRoom?.localParticipant;
+        if (!lp || _isTogglingVideo) return;
+        _isTogglingVideo = true;
+        toggleVideoBtn.disabled = true;
+        try {
+            const camPub = lp.getTrackPublication(Track.Source.Camera);
+            const currentlyLive = Boolean(lp.isCameraEnabled && camPub && !camPub.isMuted);
+            const targetEnable = !currentlyLive;
+            if (targetEnable) {
+                const camOpts = state.activeCameraDeviceId ? { deviceId: state.activeCameraDeviceId } : true;
+                await lp.setCameraEnabled(true, camOpts);
+            } else {
+                await lp.setCameraEnabled(false);
+            }
+        } catch (err) {
+            console.warn("Camera toggle failed:", err);
+            showToast("Could not toggle camera. Check browser permissions.", true);
+        } finally {
+            syncLocalMediaUI();
+            _isTogglingVideo = false;
+            toggleVideoBtn.disabled = false;
+        }
     });
 }
 
@@ -683,7 +874,13 @@ export function closeAllSidebars() {
             sidebar.classList.remove('open');
         }
     });
-    [toggleChatBtn, togglePeopleBtn, togglePollsBtn].forEach(btn => {
+    const allButtons = [
+        toggleChatBtn, togglePeopleBtn, togglePollsBtn,
+        document.getElementById('toggleChatBtn'), document.getElementById('navChatBtn'),
+        document.getElementById('togglePeopleBtn'), document.getElementById('navPeopleBtn'),
+        document.getElementById('togglePollsBtn'), document.getElementById('navPollsBtn')
+    ];
+    allButtons.forEach(btn => {
         if(btn) btn.classList.remove('active');
     });
     const rightPanelContainer = document.querySelector('.right-panel-container');
@@ -704,6 +901,8 @@ export function toggleSidebar(sidebar, btn) {
         if (sidebar === chatSidebar) {
             const badge = document.getElementById('chatBadge');
             if (badge) badge.style.display = 'none';
+            const dockBadge = document.getElementById('dockChatBadge');
+            if (dockBadge) dockBadge.style.display = 'none';
         }
         if (sidebar === pollQaSidebar) {
             const qaBadge = document.getElementById('qaBadge');
@@ -716,17 +915,25 @@ export function toggleSidebar(sidebar, btn) {
     }
 }
 
-if (toggleChatBtn) {
-    const closeChatBtn = document.getElementById('closeChatBtn');
-    toggleChatBtn.addEventListener('click', () => { toggleSidebar(chatSidebar, toggleChatBtn); });
-    if (closeChatBtn) { closeChatBtn.addEventListener('click', closeAllSidebars); }
-}
+const chatToggleBtns = [document.getElementById('toggleChatBtn'), document.getElementById('navChatBtn')].filter(Boolean);
+chatToggleBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        toggleSidebar(chatSidebar, btn);
+        chatToggleBtns.forEach(b => b.classList.toggle('active', chatSidebar.classList.contains('active')));
+    });
+});
+const closeChatBtn = document.getElementById('closeChatBtn');
+if (closeChatBtn) { closeChatBtn.addEventListener('click', closeAllSidebars); }
 
-if (togglePeopleBtn) {
-    const closePeopleBtn = document.getElementById('closePeopleBtn');
-    togglePeopleBtn.addEventListener('click', () => { toggleSidebar(peopleSidebar, togglePeopleBtn); });
-    if (closePeopleBtn) { closePeopleBtn.addEventListener('click', closeAllSidebars); }
-}
+const peopleToggleBtns = [document.getElementById('togglePeopleBtn'), document.getElementById('navPeopleBtn')].filter(Boolean);
+peopleToggleBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        toggleSidebar(peopleSidebar, btn);
+        peopleToggleBtns.forEach(b => b.classList.toggle('active', peopleSidebar.classList.contains('active')));
+    });
+});
+const closePeopleBtn = document.getElementById('closePeopleBtn');
+if (closePeopleBtn) { closePeopleBtn.addEventListener('click', closeAllSidebars); }
 
 if (togglePollsBtn) {
     const closePollQaBtn = document.getElementById('closePollQaBtn');
@@ -815,6 +1022,11 @@ document.addEventListener('click', (e) => {
         closeMoreDrawer();
     }
 });
+
+const closeDrawerBtn = document.getElementById('closeDrawerBtn');
+if (closeDrawerBtn) {
+    closeDrawerBtn.addEventListener('click', closeMoreDrawer);
+}
 
 // Wire drawer Interact nav items → panel toggles
 const drawerChatBtn = document.getElementById('drawerChatBtn');
@@ -995,10 +1207,15 @@ if (toggleVmixBtn && vmixModal) {
                 if (keyInput) keyInput.value = data.stream_key;
                 showToast("vMix RTMP credentials ready!");
             } else {
-                showToast(data.detail || "Failed to fetch vMix credentials.", true);
+                const errMsg = data.detail || "Failed to fetch vMix credentials.";
+                if (rtmpInput) rtmpInput.value = errMsg;
+                if (keyInput) keyInput.value = 'Unavailable';
+                showToast(errMsg, true);
             }
         } catch (e) {
             console.error("Error fetching vMix credentials:", e);
+            if (rtmpInput) rtmpInput.value = 'Connection failed';
+            if (keyInput) keyInput.value = 'Connection failed';
             showToast("Failed to connect to vMix Ingress service.", true);
         }
     });
@@ -1204,18 +1421,23 @@ if (mobileSheetReactBtn) {
     });
 }
 
-// Sync chat badges across desktop drawer and mobile sheet
+// Sync chat badges across bottom dock, desktop drawer, and mobile sheet
 const chatBadge = document.getElementById('chatBadge');
 const drawerChatBadge = document.getElementById('drawerChatBadge');
 const mobileSheetChatBadge = document.getElementById('mobileSheetChatBadge');
+const dockChatBadge = document.getElementById('dockChatBadge');
 
-if (chatBadge && (drawerChatBadge || mobileSheetChatBadge)) {
+if (chatBadge) {
     const syncBadges = () => {
         const isVisible = chatBadge.style.display !== 'none' && chatBadge.style.display !== '';
         if (drawerChatBadge) drawerChatBadge.style.display = isVisible ? 'block' : 'none';
         if (mobileSheetChatBadge) mobileSheetChatBadge.style.display = isVisible ? 'block' : 'none';
+        if (dockChatBadge) {
+            dockChatBadge.style.display = isVisible ? 'flex' : 'none';
+            dockChatBadge.textContent = chatBadge.textContent || '1';
+        }
     };
     const badgeObserver = new MutationObserver(syncBadges);
-    badgeObserver.observe(chatBadge, { attributes: true, attributeFilter: ['style', 'class'] });
+    badgeObserver.observe(chatBadge, { attributes: true, characterData: true, childList: true, attributeFilter: ['style', 'class'] });
 }
 

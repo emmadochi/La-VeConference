@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'support_screen.dart';
+import '../services/lcm_bridge.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -152,39 +153,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 14),
+                GestureDetector(
+                  onTap: () {
+                    LcmBridge.showFeedbackDialog(
+                      context,
+                      packageName: 'org.lifechangerstouch.lavie',
+                      appName: 'La-Vie Enterprise',
+                      currentVersion: '1.0.1',
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF2A6D).withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFFF2A6D).withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFF2A6D).withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.bug_report_outlined, color: Color(0xFFFF2A6D)),
+                        ),
+                        const SizedBox(width: 16),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Beta Feedback & Bug Report', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                              SizedBox(height: 4),
+                              Text('Help us optimize performance & stability', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: Colors.white54),
+                      ],
+                    ),
+                  ),
+                ),
 
                 const SizedBox(height: 32),
                 _buildSectionHeader('App Information'),
                 const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
-                          shape: BoxShape.circle,
+                GestureDetector(
+                  onTap: () {
+                    LcmBridge.checkForUpdates(
+                      context,
+                      packageName: 'org.lifechangerstouch.lavie',
+                      currentVersion: '1.0.1',
+                      showToastIfLatest: true,
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00E5FF).withOpacity(0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.system_update_rounded, color: Color(0xFF00E5FF)),
                         ),
-                        child: const Icon(Icons.info_outline, color: Colors.white70),
-                      ),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Version', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                            SizedBox(height: 4),
-                            Text('1.0.0 (Build 1)', style: TextStyle(color: Colors.white54, fontSize: 14)),
-                          ],
+                        const SizedBox(width: 16),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Version & Updates', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                              SizedBox(height: 4),
+                              Text('1.0.1 (Build 2) • Tap to check updates', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                        const Icon(Icons.refresh_rounded, color: Color(0xFF00E5FF), size: 20),
+                      ],
+                    ),
                   ),
                 ),
               ],

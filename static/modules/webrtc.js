@@ -2,7 +2,7 @@
 // WEBRTC CALL ENGINE & PARTICIPANT MANAGEMENT
 // ==========================================
 import { state } from "./state.js";
-import { showToast, copyMeetingLink, formatFriendlyErrorMessage } from "./utils.js";
+import { showToast, copyMeetingLink, escapeHtml, formatFriendlyErrorMessage } from "./utils.js";
 import { updateCameraDevicesList, updateAudioDevicesList, updateAudioOutputButtonState, toggleDataSaverMode, updateDataSaverBanner } from "./devices.js";
 import { handleIncomingCaption, stopSpeechRecognition, updateCaptionsUI } from "./captions.js";
 import { stopRecording } from "./recording.js";
@@ -27,29 +27,100 @@ const { Room, RoomEvent, Track, DataPacket_Kind, VideoQuality, ExternalE2EEKeyPr
 
 const MAX_VISIBLE_TILES = 9;
 
+export function syncLocalMediaUI() {
+    const lp = state.currentRoom?.localParticipant;
+    if (!lp) return;
+
+    const micPub = lp.getTrackPublication(Track.Source.Microphone);
+    const micLive = Boolean(lp.isMicrophoneEnabled && micPub && !micPub.isMuted);
+    state.isMicEnabled = micLive;
+
+    const camPub = lp.getTrackPublication(Track.Source.Camera);
+    const camLive = Boolean(lp.isCameraEnabled && camPub && !camPub.isMuted);
+    state.isVideoEnabled = camLive;
+
+    const localWrapper = document.getElementById('wrapper-local-camera');
+    const localVideo = document.getElementById('localVideo');
+    const toggleMicBtn = document.getElementById('toggleMicBtn');
+    const toggleVideoBtn = document.getElementById('toggleVideoBtn');
+
+    if (localWrapper) {
+        localWrapper.classList.toggle('audio-muted', !micLive);
+        localWrapper.classList.toggle('video-muted', !camLive);
+        localWrapper.classList.toggle('video-off', !camLive);
+    }
+    const micIcon = document.getElementById('localMicStatusIcon');
+    const micText = document.getElementById('localMicStatusText');
+    const micPill = document.getElementById('localMicStatusPill');
+    if (micIcon) micIcon.textContent = micLive ? 'mic' : 'mic_off';
+    if (micText) micText.textContent = micLive ? 'Mic active' : 'Muted';
+    if (micPill) micPill.classList.toggle('pill-muted', !micLive);
+
+    if (toggleMicBtn) {
+        toggleMicBtn.classList.toggle('active', micLive);
+        toggleMicBtn.classList.toggle('muted-off', !micLive);
+        const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
+        const txt = toggleMicBtn.querySelector('.btn-subtext') || toggleMicBtn.querySelector('.btn-text');
+        if (icon) icon.textContent = micLive ? 'mic' : 'mic_off';
+        if (txt) txt.textContent = micLive ? 'Mute' : 'Muted';
+    }
+
+    if (toggleVideoBtn) {
+        toggleVideoBtn.classList.toggle('active', camLive);
+        toggleVideoBtn.classList.toggle('muted-off', !camLive);
+        const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
+        const txt = toggleVideoBtn.querySelector('.btn-subtext') || toggleVideoBtn.querySelector('.btn-text');
+        if (icon) icon.textContent = camLive ? 'videocam' : 'videocam_off';
+        if (txt) txt.textContent = camLive ? 'Camera' : 'Camera Off';
+    }
+
+    if (camLive && camPub?.videoTrack && localVideo) {
+        camPub.videoTrack.attach(localVideo);
+    }
+}
+
 // ==========================================
 // MEETING CHRONOMETER / TIMER
 // ==========================================
 let _meetingTimerInterval = null;
 
-export function startMeetingTimer(startedAtSec) {
+export function startMeetingTimer(startedAtSec, scheduledTimeSec = null) {
     if (_meetingTimerInterval) {
         clearInterval(_meetingTimerInterval);
         _meetingTimerInterval = null;
     }
-    const startTimestamp = (startedAtSec && startedAtSec > 0)
+    let activeStartTimestamp = (startedAtSec && startedAtSec > 0)
         ? startedAtSec
-        : Math.floor(Date.now() / 1000);
+        : null;
 
     const update = () => {
         const el = document.getElementById('meetingTimerText');
         if (!el) return;
         const nowSec = Math.floor(Date.now() / 1000);
-        const elapsed = Math.max(0, nowSec - startTimestamp);
+        const pad = (n) => String(n).padStart(2, '0');
+
+        // If meeting is scheduled in the future, wait in countdown mode until scheduled time arrives
+        if (scheduledTimeSec && nowSec < scheduledTimeSec) {
+            const remaining = Math.max(0, scheduledTimeSec - nowSec);
+            const rHours = Math.floor(remaining / 3600);
+            const rMins = Math.floor((remaining % 3600) / 60);
+            const rSecs = remaining % 60;
+            el.textContent = rHours > 0
+                ? `Starts in ${rHours}:${pad(rMins)}:${pad(rSecs)}`
+                : `Starts in ${pad(rMins)}:${pad(rSecs)}`;
+            return;
+        }
+
+        if (!activeStartTimestamp) {
+            activeStartTimestamp = scheduledTimeSec && nowSec >= scheduledTimeSec
+                ? scheduledTimeSec
+                : nowSec;
+        }
+
+        const elapsed = Math.max(0, nowSec - activeStartTimestamp);
         const hours = Math.floor(elapsed / 3600);
         const mins = Math.floor((elapsed % 3600) / 60);
         const secs = elapsed % 60;
-        const pad = (n) => String(n).padStart(2, '0');
         if (hours > 0) {
             el.textContent = `${hours}:${pad(mins)}:${pad(secs)}`;
         } else {
@@ -85,24 +156,99 @@ export async function startCall(roomId, options = {}) {
     const toggleMicBtn = document.getElementById('toggleMicBtn');
     const toggleVideoBtn = document.getElementById('toggleVideoBtn');
 
+    const enableMicAtStart = options.isMicEnabled !== undefined ? options.isMicEnabled : state.isMicEnabled;
+    const enableVideoAtStart = options.isVideoEnabled !== undefined ? options.isVideoEnabled : state.isVideoEnabled;
+
     try {
+        document.body.classList.add('in-call');
         if (joinScreen) joinScreen.style.display = 'none';
         if (appLayout) appLayout.style.display = 'flex';
         if (mediaControls) mediaControls.style.display = 'flex';
 
+        // Bind In-Call Header and Solo State
+        const headerMeetingInfo = document.getElementById('headerMeetingInfo');
+        const headerRoomId = document.getElementById('headerRoomId');
+        if (headerMeetingInfo) headerMeetingInfo.style.display = 'flex';
+        if (headerRoomId) headerRoomId.textContent = roomId;
+
+        const inCallInviteBtn = document.getElementById('inCallInviteBtn');
+        if (inCallInviteBtn) {
+            inCallInviteBtn.style.display = 'inline-flex';
+            inCallInviteBtn.onclick = () => window.copyMeetingLink(roomId);
+        }
+
+        const headerCopyBtn = document.getElementById('headerCopyBtn');
+        if (headerCopyBtn) {
+            headerCopyBtn.onclick = () => window.copyMeetingLink(roomId);
+        }
+
+        const soloRoomCodeDisplay = document.getElementById('soloRoomCodeDisplay');
+        if (soloRoomCodeDisplay) soloRoomCodeDisplay.textContent = roomId;
+
+        const soloCopyLinkBtn = document.getElementById('soloCopyLinkBtn');
+        if (soloCopyLinkBtn) {
+            soloCopyLinkBtn.onclick = () => {
+                window.copyMeetingLink(roomId);
+                const txt = document.getElementById('soloCopyBtnText');
+                if (txt) {
+                    const orig = txt.textContent;
+                    txt.textContent = 'Copied to clipboard!';
+                    setTimeout(() => { txt.textContent = orig; }, 2500);
+                }
+            };
+        }
+
+        const soloWhatsappBtn = document.getElementById('soloWhatsappBtn');
+        if (soloWhatsappBtn) {
+            soloWhatsappBtn.onclick = () => {
+                const url = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+                const text = encodeURIComponent(`Join my meeting on La-Vie Conference: ${url}`);
+                window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
+            };
+        }
+
+        const closeSoloInviteBtn = document.getElementById('closeSoloInviteBtn');
+        if (closeSoloInviteBtn) {
+            closeSoloInviteBtn.onclick = () => {
+                const card = document.getElementById('soloInviteCard');
+                if (card) card.style.display = 'none';
+            };
+        }
+
+        const soloInviteCard = document.getElementById('soloInviteCard');
+        if (soloInviteCard) soloInviteCard.style.display = 'block';
+
+        // Extract 2-letter luxury initials (e.g., Emmanuel Obinezu -> EO)
+        const rawName = (state.userName || 'You').trim();
+        const parts = rawName.split(/\s+/).filter(Boolean);
+        const userInitials = parts.length > 1
+            ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+            : (rawName.length >= 2 ? rawName.substring(0, 2).toUpperCase() : rawName.toUpperCase());
+
+        const localAvatarLetter = document.getElementById('localAvatarLetter');
+        if (localAvatarLetter) localAvatarLetter.textContent = userInitials;
+        const localAvatarName = document.getElementById('localAvatarName');
+        if (localAvatarName) localAvatarName.textContent = rawName;
+        const localLabel = document.getElementById('localLabel');
+        if (localLabel) localLabel.textContent = rawName + ' (You)';
+
+        // Ensure local wrapper reflects initial state cleanly
+        const localWrapper = document.getElementById('wrapper-local-camera');
+        if (localWrapper) {
+            if (!enableVideoAtStart) {
+                localWrapper.classList.add('video-muted', 'video-off');
+            } else {
+                localWrapper.classList.remove('video-muted', 'video-off');
+            }
+            if (!enableMicAtStart) {
+                localWrapper.classList.add('audio-muted');
+            } else {
+                localWrapper.classList.remove('audio-muted');
+            }
+        }
+
         if (meetingInfo) {
-            meetingInfo.innerHTML = `
-                <span class="material-symbols-outlined" style="font-size: 18px; color: var(--primary, #00E5FF);">info</span>
-                <span class="meeting-code" style="font-family: monospace; font-size: 0.9rem; letter-spacing: 0.5px; margin: 0 4px;">${roomId}</span>
-                <button class="copy-code-badge-btn" title="Copy Meeting Link" onclick="window.copyMeetingLink('${roomId}')">
-                    <span class="material-symbols-outlined" style="font-size: 18px;">content_copy</span>
-                </button>
-                <span class="meeting-info-divider"></span>
-                <div class="meeting-timer-pill" id="meetingTimer" title="Meeting duration">
-                    <span class="material-symbols-outlined timer-icon">schedule</span>
-                    <span id="meetingTimerText">00:00</span>
-                </div>
-            `;
+            meetingInfo.style.display = 'none';
         }
 
         const peerId = Math.random().toString(36).substring(2, 10);
@@ -113,17 +259,26 @@ export async function startCall(roomId, options = {}) {
         let response = await fetch(`/token/${roomId}/${peerId}?name=${encodeURIComponent(state.userName)}`, { headers });
         if (!response.ok) {
             let errMsg = "Failed to connect to meeting room";
+            let errDetail = null;
             try {
                 const errData = await response.json();
                 if (errData && errData.detail) {
+                    errDetail = errData.detail;
                     errMsg = typeof errData.detail === 'string' ? errData.detail : (errData.detail.message || JSON.stringify(errData.detail));
                 }
             } catch (_) {}
+            if (response.status === 403 && errDetail && typeof errDetail === 'object' && errDetail.error === 'waiting_approval') {
+                await showWebWaitingRoomOverlay(roomId, errDetail.title || 'Private Meeting', options);
+                return;
+            }
             throw new Error(errMsg);
         }
-        const { token, is_admin, room_started_at } = await response.json();
+        const { token, is_admin, room_started_at, scheduled_time_ts } = await response.json();
         state.isAdmin = is_admin || false;
-        startMeetingTimer(room_started_at);
+        startMeetingTimer(room_started_at, scheduled_time_ts);
+        if (state.isAdmin) {
+            _startHostWaitingMonitor(roomId);
+        }
 
         const toggleRecordBtn = document.getElementById('toggleRecordBtn');
         if (state.isAdmin && toggleRecordBtn) { toggleRecordBtn.style.display = 'flex'; }
@@ -180,6 +335,16 @@ export async function startCall(roomId, options = {}) {
         state.currentRoom.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
             state.activeSpeakerSet.clear();
             speakers.forEach(p => state.activeSpeakerSet.add(p.identity));
+
+            const localWrapper = document.getElementById('wrapper-local-camera');
+            if (localWrapper && state.currentRoom.localParticipant) {
+                const isLocalSpeaking = state.activeSpeakerSet.has(state.currentRoom.localParticipant.identity);
+                localWrapper.classList.toggle('speaking', isLocalSpeaking);
+                const micStatusPill = document.getElementById('localMicStatusPill');
+                if (micStatusPill) {
+                    micStatusPill.classList.toggle('speaking-pill', isLocalSpeaking);
+                }
+            }
 
             if (videoGrid) {
                 videoGrid.querySelectorAll('.video-wrapper:not(.local)').forEach(wrapper => {
@@ -242,19 +407,31 @@ export async function startCall(roomId, options = {}) {
             renderParticipants();
         });
 
-        // Track Muted / Unmuted
+        // Track Muted / Unmuted / Local Track Lifecycle
         state.currentRoom.on(RoomEvent.TrackMuted, (pub, participant) => {
-            if (pub.kind === 'video') {
+            if (participant === state.currentRoom?.localParticipant) {
+                syncLocalMediaUI();
+            } else if (pub.kind === 'video') {
                 const wrapper = document.getElementById(`wrapper-${participant.identity}-${pub.source}`);
                 if (wrapper) wrapper.classList.add('video-muted');
             }
         });
 
         state.currentRoom.on(RoomEvent.TrackUnmuted, (pub, participant) => {
-            if (pub.kind === 'video') {
+            if (participant === state.currentRoom?.localParticipant) {
+                syncLocalMediaUI();
+            } else if (pub.kind === 'video') {
                 const wrapper = document.getElementById(`wrapper-${participant.identity}-${pub.source}`);
                 if (wrapper) wrapper.classList.remove('video-muted');
             }
+        });
+
+        state.currentRoom.on(RoomEvent.LocalTrackPublished, () => {
+            syncLocalMediaUI();
+        });
+
+        state.currentRoom.on(RoomEvent.LocalTrackUnpublished, () => {
+            syncLocalMediaUI();
         });
 
         // Participant Connected / Disconnected
@@ -361,7 +538,7 @@ export async function startCall(roomId, options = {}) {
         });
 
         // Determine WebRTC server URL
-        let wsUrl = state.livekitUrlFallback || "wss://lavie-live-bmlbvgd2.livekit.cloud";
+        let wsUrl = state.livekitUrlFallback || "wss://lavie-prod-ngzo1pm2.livekit.cloud";
         try {
             const healthCheck = await fetch('/livekit-url');
             if (healthCheck.ok) {
@@ -375,8 +552,6 @@ export async function startCall(roomId, options = {}) {
         await state.currentRoom.connect(wsUrl, token);
 
         // Apply green room device preferences if provided
-        const enableMicAtStart = options.isMicEnabled !== undefined ? options.isMicEnabled : state.isMicEnabled;
-        const enableVideoAtStart = options.isVideoEnabled !== undefined ? options.isVideoEnabled : state.isVideoEnabled;
         const chosenCamId = options.cameraDeviceId || state.activeCameraDeviceId;
         const chosenMicId = options.audioDeviceId || state.activeAudioInputDeviceId;
 
@@ -389,22 +564,30 @@ export async function startCall(roomId, options = {}) {
                 const camOptions = chosenCamId ? { deviceId: chosenCamId } : true;
                 await state.currentRoom.localParticipant.setCameraEnabled(true, camOptions);
                 state.isVideoEnabled = true;
+                if (localWrapper) {
+                    localWrapper.classList.remove('video-muted', 'video-off');
+                }
                 if (toggleVideoBtn) {
                     toggleVideoBtn.classList.add('active');
+                    toggleVideoBtn.classList.remove('muted-off');
                     const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
                     if (icon) icon.textContent = 'videocam';
-                    const txt = toggleVideoBtn.querySelector('.btn-text');
-                    if (txt) txt.textContent = 'Hide';
+                    const txt = toggleVideoBtn.querySelector('.btn-subtext') || toggleVideoBtn.querySelector('.btn-text');
+                    if (txt) txt.textContent = 'Camera';
                 }
             } else {
                 await state.currentRoom.localParticipant.setCameraEnabled(false);
                 state.isVideoEnabled = false;
+                if (localWrapper) {
+                    localWrapper.classList.add('video-muted', 'video-off');
+                }
                 if (toggleVideoBtn) {
                     toggleVideoBtn.classList.remove('active');
+                    toggleVideoBtn.classList.add('muted-off');
                     const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
                     if (icon) icon.textContent = 'videocam_off';
-                    const txt = toggleVideoBtn.querySelector('.btn-text');
-                    if (txt) txt.textContent = 'Show';
+                    const txt = toggleVideoBtn.querySelector('.btn-subtext') || toggleVideoBtn.querySelector('.btn-text');
+                    if (txt) txt.textContent = 'Camera Off';
                 }
             }
 
@@ -416,49 +599,73 @@ export async function startCall(roomId, options = {}) {
             console.warn("Camera permission denied or unavailable:", camErr);
             camDenied = true;
             state.isVideoEnabled = false;
+            if (localWrapper) {
+                localWrapper.classList.add('video-muted', 'video-off');
+            }
             if (toggleVideoBtn) {
                 toggleVideoBtn.classList.remove('active');
+                toggleVideoBtn.classList.add('muted-off');
                 const icon = toggleVideoBtn.querySelector('.material-symbols-outlined');
                 if (icon) icon.textContent = 'videocam_off';
-                const txt = toggleVideoBtn.querySelector('.btn-text');
-                if (txt) txt.textContent = 'Show';
+                const txt = toggleVideoBtn.querySelector('.btn-subtext') || toggleVideoBtn.querySelector('.btn-text');
+                if (txt) txt.textContent = 'Camera Off';
             }
         }
 
         // Publish Microphone
         try {
+            const updateLocalMicUI = (isMuted) => {
+                if (localWrapper) {
+                    localWrapper.classList.toggle('audio-muted', isMuted);
+                }
+                const micIcon = document.getElementById('localMicStatusIcon');
+                const micText = document.getElementById('localMicStatusText');
+                const micPill = document.getElementById('localMicStatusPill');
+                if (micIcon) micIcon.textContent = isMuted ? 'mic_off' : 'mic';
+                if (micText) micText.textContent = isMuted ? 'Muted' : 'Mic active';
+                if (micPill) micPill.classList.toggle('pill-muted', isMuted);
+            };
+
             if (enableMicAtStart) {
                 const micOptions = chosenMicId ? { deviceId: chosenMicId } : true;
                 await state.currentRoom.localParticipant.setMicrophoneEnabled(true, micOptions, { dtx: true });
                 state.isMicEnabled = true;
+                updateLocalMicUI(false);
                 if (toggleMicBtn) {
                     toggleMicBtn.classList.add('active');
+                    toggleMicBtn.classList.remove('muted-off');
                     const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
                     if (icon) icon.textContent = 'mic';
-                    const txt = toggleMicBtn.querySelector('.btn-text');
+                    const txt = toggleMicBtn.querySelector('.btn-subtext') || toggleMicBtn.querySelector('.btn-text');
                     if (txt) txt.textContent = 'Mute';
                 }
             } else {
                 await state.currentRoom.localParticipant.setMicrophoneEnabled(false);
                 state.isMicEnabled = false;
+                updateLocalMicUI(true);
                 if (toggleMicBtn) {
                     toggleMicBtn.classList.remove('active');
+                    toggleMicBtn.classList.add('muted-off');
                     const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
                     if (icon) icon.textContent = 'mic_off';
-                    const txt = toggleMicBtn.querySelector('.btn-text');
-                    if (txt) txt.textContent = 'Unmute';
+                    const txt = toggleMicBtn.querySelector('.btn-subtext') || toggleMicBtn.querySelector('.btn-text');
+                    if (txt) txt.textContent = 'Muted';
                 }
             }
         } catch (micErr) {
             console.warn("Microphone permission denied or unavailable:", micErr);
             micDenied = true;
             state.isMicEnabled = false;
+            if (localWrapper) localWrapper.classList.add('audio-muted');
+            const micPill = document.getElementById('localMicStatusPill');
+            if (micPill) micPill.classList.add('pill-muted');
             if (toggleMicBtn) {
                 toggleMicBtn.classList.remove('active');
+                toggleMicBtn.classList.add('muted-off');
                 const icon = toggleMicBtn.querySelector('.material-symbols-outlined');
                 if (icon) icon.textContent = 'mic_off';
-                const txt = toggleMicBtn.querySelector('.btn-text');
-                if (txt) txt.textContent = 'Unmute';
+                const txt = toggleMicBtn.querySelector('.btn-subtext') || toggleMicBtn.querySelector('.btn-text');
+                if (txt) txt.textContent = 'Muted';
             }
         }
 
@@ -469,6 +676,8 @@ export async function startCall(roomId, options = {}) {
         } else if (micDenied) {
             showToast("Microphone blocked. Joined with camera only.", false);
         }
+
+        syncLocalMediaUI();
 
         // Network Information API detection for slow networks
         if (typeof navigator !== 'undefined' && 'connection' in navigator) {
@@ -644,7 +853,20 @@ export function attachVideoTrack(track, participant, source) {
 
         const avatarDiv = document.createElement('div');
         avatarDiv.className = 'avatar-placeholder';
-        avatarDiv.textContent = (participant.name || participant.identity || '?').charAt(0).toUpperCase();
+        const rName = (participant.name || participant.identity || 'Guest').trim();
+        const rParts = rName.split(/\s+/).filter(Boolean);
+        const rInitials = rParts.length > 1
+            ? (rParts[0][0] + rParts[rParts.length - 1][0]).toUpperCase()
+            : (rName.length >= 2 ? rName.substring(0, 2).toUpperCase() : rName.toUpperCase());
+        avatarDiv.innerHTML = `
+            <div class="avatar-circle">
+                <span>${rInitials}</span>
+                <div class="avatar-pulse-ring"></div>
+            </div>
+            <div class="avatar-info-group">
+                <span class="avatar-name">${rName}</span>
+            </div>
+        `;
         wrapper.appendChild(avatarDiv);
 
         if (track.isMuted) {
@@ -709,6 +931,15 @@ export function leaveCall() {
     const toggleRecordBtn = document.getElementById('toggleRecordBtn');
 
     stopMeetingTimer();
+    _stopWaitingIntervals();
+
+    document.body.classList.remove('in-call');
+    const headerMeetingInfo = document.getElementById('headerMeetingInfo');
+    if (headerMeetingInfo) headerMeetingInfo.style.display = 'none';
+    const inCallInviteBtn = document.getElementById('inCallInviteBtn');
+    if (inCallInviteBtn) inCallInviteBtn.style.display = 'none';
+    const soloInviteCard = document.getElementById('soloInviteCard');
+    if (soloInviteCard) soloInviteCard.style.display = 'none';
 
     if (appLayout) appLayout.style.display = 'none';
     if (joinScreen) joinScreen.style.display = 'block';
@@ -1037,6 +1268,17 @@ export function renderParticipants() {
             state.participantDomMap.delete(key);
         }
     });
+
+    const totalCount = (local ? 1 : 0) + (state.currentRoom.remoteParticipants ? state.currentRoom.remoteParticipants.size : 0);
+    const dockPeopleBadge = document.getElementById('dockPeopleBadge');
+    if (dockPeopleBadge) dockPeopleBadge.textContent = totalCount;
+    const peopleBtnSubtext = document.getElementById('peopleBtnSubtext');
+    if (peopleBtnSubtext) peopleBtnSubtext.textContent = `People (${totalCount})`;
+
+    const soloInviteCard = document.getElementById('soloInviteCard');
+    if (soloInviteCard) {
+        soloInviteCard.style.display = totalCount <= 1 ? 'block' : 'none';
+    }
 }
 
 function _updateParticipantElement(el, participant, isLocal) {
@@ -1175,4 +1417,210 @@ function handleRemoteWhiteboardToggle(isActive) {
         if (mainColumn) mainColumn.classList.remove('with-whiteboard');
         if (whiteboardContainer) whiteboardContainer.classList.remove('active');
     }
+}
+
+// ==========================================
+// PRIVATE WAITING ROOM (ACCESS APPROVAL)
+// ==========================================
+let _waitingPollInterval = null;
+let _hostWaitingMonitorInterval = null;
+
+function _stopWaitingIntervals() {
+    if (_waitingPollInterval) { clearInterval(_waitingPollInterval); _waitingPollInterval = null; }
+    if (_hostWaitingMonitorInterval) { clearInterval(_hostWaitingMonitorInterval); _hostWaitingMonitorInterval = null; }
+    const overlay = document.getElementById('webWaitingRoomOverlay');
+    if (overlay) overlay.remove();
+    const banner = document.getElementById('webHostKnockBanner');
+    if (banner) banner.remove();
+}
+
+async function showWebWaitingRoomOverlay(roomId, title, joinOptions) {
+    _stopWaitingIntervals();
+    const appLayout = document.getElementById('appLayout');
+    const joinScreen = document.getElementById('joinScreen');
+    if (appLayout) appLayout.style.display = 'none';
+    if (joinScreen) joinScreen.style.display = 'block';
+
+    const fbToken = await getAuthToken();
+    if (fbToken) {
+        await fetch(`/api/room/${encodeURIComponent(roomId)}/knock`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${fbToken}` }
+        }).catch(() => {});
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'webWaitingRoomOverlay';
+    overlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 99995;
+        background: rgba(7, 11, 25, 0.92); backdrop-filter: blur(18px);
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+    `;
+    overlay.innerHTML = `
+        <div style="max-width:420px;width:100%;background:rgba(15,23,42,0.96);border:1px solid rgba(0,229,255,0.35);border-radius:24px;padding:32px;text-align:center;color:#fff;font-family:'Inter',sans-serif;">
+            <div style="width:68px;height:68px;border-radius:50%;background:rgba(0,229,255,0.14);color:#00E5FF;display:flex;align-items:center;justify-content:center;margin:0 auto 18px auto;">
+                <span class="material-symbols-outlined" style="font-size:34px;">admin_panel_settings</span>
+            </div>
+            <h2 style="margin:0 0 8px 0;font-size:21px;">${escapeHtml(title)}</h2>
+            <div id="webWaitStatusBadge" style="display:inline-block;padding:5px 14px;border-radius:20px;background:rgba(245,158,11,0.15);color:#fbbf24;font-size:11.5px;font-weight:700;margin-bottom:14px;">
+                WAITING FOR HOST APPROVAL
+            </div>
+            <p id="webWaitStatusText" style="color:rgba(255,255,255,0.7);font-size:14px;line-height:1.5;margin:0 0 24px 0;">
+                Please wait — the host has been notified and will let you in shortly.
+            </p>
+            <button id="webLeaveWaitBtn" style="width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.2);background:transparent;color:#cbd5e1;font-weight:600;cursor:pointer;">
+                Leave Waiting Room
+            </button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    document.getElementById('webLeaveWaitBtn').onclick = () => {
+        _stopWaitingIntervals();
+    };
+
+    _waitingPollInterval = setInterval(async () => {
+        try {
+            const t = await getAuthToken();
+            const r = await fetch(`/api/room/${encodeURIComponent(roomId)}/knock-status`, {
+                headers: t ? { 'Authorization': `Bearer ${t}` } : {}
+            });
+            if (!r.ok) return;
+            const res = await r.json();
+            if (res.status === 'admitted' || res.status === 'open') {
+                _stopWaitingIntervals();
+                startCall(roomId, joinOptions);
+            } else if (res.status === 'denied' || res.status === 'locked') {
+                clearInterval(_waitingPollInterval);
+                _waitingPollInterval = null;
+                const badge = document.getElementById('webWaitStatusBadge');
+                const txt = document.getElementById('webWaitStatusText');
+                if (badge) { badge.textContent = res.status === 'locked' ? 'MEETING LOCKED' : 'ACCESS DECLINED'; badge.style.color = '#f87171'; }
+                if (txt) txt.textContent = res.status === 'locked'
+                    ? 'The host has locked this meeting.'
+                    : 'The host declined your request to enter this private meeting.';
+            }
+        } catch (_) {}
+    }, 2500);
+}
+
+async function _decideWebWaitingGuest(roomId, targetUid, action) {
+    const t = await getAuthToken();
+    await fetch(`/api/room/${encodeURIComponent(roomId)}/waiting-room/decision`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(t ? { 'Authorization': `Bearer ${t}` } : {})
+        },
+        body: JSON.stringify({ target_uid: targetUid, action })
+    }).catch(() => {});
+}
+
+async function _startHostWaitingMonitor(roomId) {
+    if (_hostWaitingMonitorInterval) clearInterval(_hostWaitingMonitorInterval);
+
+    const hostCtrl = document.getElementById('webHostWaitingControls');
+    const toggleInput = document.getElementById('webWaitingRoomToggle');
+    if (hostCtrl) hostCtrl.style.display = 'block';
+
+    // Sync initial toggle state
+    fetch(`/api/meeting/${encodeURIComponent(roomId)}/info`)
+        .then(r => r.ok ? r.json() : null)
+        .then(info => {
+            if (info && toggleInput) toggleInput.checked = Boolean(info.requireApproval);
+        }).catch(() => {});
+
+    if (toggleInput) {
+        toggleInput.onchange = async () => {
+            const t = await getAuthToken();
+            const r = await fetch('/api/room/waiting-room/toggle', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(t ? { 'Authorization': `Bearer ${t}` } : {})
+                },
+                body: JSON.stringify({ room_id: roomId, enabled: toggleInput.checked })
+            });
+            if (r.ok) {
+                showToast(toggleInput.checked ? 'Private Waiting Room Enabled' : 'Waiting Room Disabled');
+            }
+        };
+    }
+
+    const pollHostQueue = async () => {
+        try {
+            const t = await getAuthToken();
+            if (!t) return;
+            const r = await fetch(`/api/room/${encodeURIComponent(roomId)}/waiting-room`, {
+                headers: { 'Authorization': `Bearer ${t}` }
+            });
+            if (!r.ok) return;
+            const data = await r.json();
+            const waiting = data.waiting || [];
+            _renderWebWaitingQueue(roomId, waiting);
+        } catch (_) {}
+    };
+
+    pollHostQueue();
+    _hostWaitingMonitorInterval = setInterval(pollHostQueue, 2500);
+}
+
+function _renderWebWaitingQueue(roomId, waiting) {
+    const section = document.getElementById('webWaitingRoomSection');
+    let banner = document.getElementById('webHostKnockBanner');
+
+    if (!waiting || waiting.length === 0) {
+        if (section) { section.style.display = 'none'; section.innerHTML = ''; }
+        if (banner) banner.remove();
+        return;
+    }
+
+    if (section) {
+        section.style.display = 'block';
+        section.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="color:#fbbf24;font-size:12px;font-weight:700;">WAITING ROOM (${waiting.length})</span>
+                <button id="webAdmitAllBtn" style="background:rgba(0,255,163,0.2);color:#00FFA3;border:none;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;">Admit All</button>
+            </div>
+            ${waiting.map(g => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 0;">
+                    <span style="color:#fff;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(g.name)}</span>
+                    <div style="display:flex;gap:4px;">
+                        <button class="web-deny-btn" data-uid="${escapeHtml(g.uid)}" style="background:transparent;color:#f87171;border:1px solid rgba(248,113,113,0.4);border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;">Deny</button>
+                        <button class="web-admit-btn" data-uid="${escapeHtml(g.uid)}" style="background:#00FFA3;color:#070B19;border:none;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;">Admit</button>
+                    </div>
+                </div>
+            `).join('')}
+        `;
+
+        const admitAllBtn = document.getElementById('webAdmitAllBtn');
+        if (admitAllBtn) admitAllBtn.onclick = async () => { await _decideWebWaitingGuest(roomId, '', 'admit_all'); _renderWebWaitingQueue(roomId, []); };
+        section.querySelectorAll('.web-admit-btn').forEach(b => {
+            b.onclick = async () => { await _decideWebWaitingGuest(roomId, b.dataset.uid, 'admit'); _renderWebWaitingQueue(roomId, waiting.filter(x => x.uid !== b.dataset.uid)); };
+        });
+        section.querySelectorAll('.web-deny-btn').forEach(b => {
+            b.onclick = async () => { await _decideWebWaitingGuest(roomId, b.dataset.uid, 'deny'); _renderWebWaitingQueue(roomId, waiting.filter(x => x.uid !== b.dataset.uid)); };
+        });
+    }
+
+    // Floating top toast banner for quick admission
+    const first = waiting[0];
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'webHostKnockBanner';
+        banner.style.cssText = `
+            position: fixed; top: 72px; left: 50%; transform: translateX(-50%); z-index: 99990;
+            background: rgba(15, 23, 42, 0.96); border: 1px solid rgba(251, 191, 36, 0.65);
+            border-radius: 14px; padding: 10px 14px; display: flex; align-items: center; gap: 12px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.45); color: #fff; font-family: 'Inter', sans-serif;
+        `;
+        document.body.appendChild(banner);
+    }
+    banner.innerHTML = `
+        <span style="font-size:13px;">🔒 <strong>${escapeHtml(first.name)}</strong> wants to join${waiting.length > 1 ? ` (+${waiting.length - 1})` : ''}</span>
+        <button id="webBannerDeny" style="background:transparent;color:#f87171;border:1px solid rgba(248,113,113,0.4);border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;">Deny</button>
+        <button id="webBannerAdmit" style="background:#00FFA3;color:#070B19;border:none;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;">Admit</button>
+    `;
+    document.getElementById('webBannerAdmit').onclick = async () => { await _decideWebWaitingGuest(roomId, first.uid, 'admit'); _renderWebWaitingQueue(roomId, waiting.filter(x => x.uid !== first.uid)); };
+    document.getElementById('webBannerDeny').onclick = async () => { await _decideWebWaitingGuest(roomId, first.uid, 'deny'); _renderWebWaitingQueue(roomId, waiting.filter(x => x.uid !== first.uid)); };
 }

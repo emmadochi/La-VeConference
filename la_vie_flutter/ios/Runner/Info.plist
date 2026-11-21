@@ -55,6 +55,16 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>La_Vie requires microphone access for audio and video calls, including when minimized or running in the background.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>La_Vie requires camera access for video calls.</string>
+	<string>La_Vie requires camera access for video calls and profile pictures.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>La_Vie requires photo library access to upload profile photos, meeting attachments, and documents.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>La_Vie requires permission to save meeting media to your photos library.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>La_Vie requires Bluetooth access to connect to wireless headsets and microphones during conference calls.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>La_Vie requires Bluetooth access to route audio to wireless headsets.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

@@ -1,18 +1,18 @@
 import 'dart:ui';
 import 'dart:math' as math;
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import '../api_service.dart';
 import '../models/meeting.dart';
-import '../services/notification_service.dart';
+import '../services/calendar_helper.dart';
+import '../widgets/schedule_meeting_dialog.dart';
+import '../widgets/upcoming_meeting_invite_sheet.dart';
 import 'video_room_screen.dart';
 import 'pre_join_dialog.dart';
 import 'notifications_screen.dart';
@@ -27,6 +27,48 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _inlineCodeController = TextEditingController();
   bool _showWhatsNewBanner = true;
+  String? _cachedAvatarUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboardAvatar();
+  }
+
+  String? _normalizeAvatarUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.startsWith('/')) {
+      return '${ApiService.baseUrl}$trimmed';
+    }
+    return trimmed;
+  }
+
+  Future<void> _loadDashboardAvatar() async {
+    final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
+    if (user == null) return;
+    final authUrl = _normalizeAvatarUrl(user.photoURL);
+    if (authUrl != null && mounted) {
+      setState(() => _cachedAvatarUrl = authUrl);
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = _normalizeAvatarUrl(prefs.getString('user_avatar_cache_${user.uid}'));
+      if (cached != null && mounted) {
+        setState(() => _cachedAvatarUrl = cached);
+      }
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final fsUrl = _normalizeAvatarUrl((data['photoURL'] ?? data['avatar'])?.toString());
+        if (fsUrl != null) {
+          await prefs.setString('user_avatar_cache_${user.uid}', fsUrl);
+          if (mounted) setState(() => _cachedAvatarUrl = fsUrl);
+        }
+      }
+    } catch (_) {}
+  }
 
   @override
   void dispose() {
@@ -44,63 +86,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
   }
 
-  Future<bool> _createGoogleCalendarEvent(String title, DateTime startTime, String roomId, String e2eeKey) async {
-    try {
-      final account = await GoogleSignIn.instance.attemptLightweightAuthentication();
-      if (account == null) return false;
-      final auth = account.authentication;
-      final token = auth.idToken ?? (await account.authorizationClient.authorizationForScopes([
-        'https://www.googleapis.com/auth/calendar.events',
-      ]))?.accessToken;
-      
-      if (token == null) return false;
+  Map<String, String?> _extractRoomAndKey(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return {'roomId': '', 'e2eeKey': null};
 
-      final endTime = startTime.add(const Duration(hours: 1));
-      final meetingLink = 'https://la-vie.lifechangerstouch.org/?room=$roomId#$e2eeKey';
-
-      final response = await http.post(
-        Uri.parse('https://www.googleapis.com/calendar/v3/calendars/primary/events'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'summary': title,
-          'description': 'Join La-Vie Conference:\n$meetingLink\n\nThis meeting is End-to-End Encrypted.',
-          'start': {
-            'dateTime': startTime.toUtc().toIso8601String(),
-          },
-          'end': {
-            'dateTime': endTime.toUtc().toIso8601String(),
-          },
-        }),
-      );
-      return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (e) {
-      debugPrint('Calendar error: $e');
-      return false;
+    final parsed = Uri.tryParse(trimmed);
+    if (parsed != null && (parsed.hasScheme || trimmed.contains('?room=') || trimmed.contains('/'))) {
+      String? room = parsed.queryParameters['room'];
+      if ((room == null || room.isEmpty) && parsed.pathSegments.isNotEmpty) {
+        final segs = parsed.pathSegments;
+        if (segs.length >= 2 && ['meeting', 'room', 'join', 'conf'].contains(segs[0])) {
+          room = segs[1];
+        } else {
+          room = segs.last;
+        }
+      }
+      final key = parsed.fragment.isNotEmpty ? parsed.fragment.trim() : null;
+      if (room != null && room.isNotEmpty) {
+        return {'roomId': room.split('#').first.trim(), 'e2eeKey': key};
+      }
     }
+
+    if (trimmed.contains('#')) {
+      final parts = trimmed.split('#');
+      return {'roomId': parts.first.trim(), 'e2eeKey': parts.sublist(1).join('#').trim()};
+    }
+    return {'roomId': trimmed, 'e2eeKey': null};
   }
 
-  void _joinInlineMeeting([String? explicitCode]) async {
-    String code = (explicitCode ?? _inlineCodeController.text).trim();
-    if (code.contains('/')) {
-      code = code.split('/').last;
-    }
-    if (code.contains('?')) {
-      code = code.split('?').first;
-    }
+  Future<void> _joinMeetingByRawInput(String rawInput) async {
+    final extracted = _extractRoomAndKey(rawInput);
+    final code = extracted['roomId'] ?? '';
+    final e2eeKey = extracted['e2eeKey'];
     if (code.isEmpty) return;
 
-    final user = FirebaseAuth.instance.currentUser;
-    final displayName = user?.displayName ?? 'Premium User';
+    if (e2eeKey != null && e2eeKey.isNotEmpty) {
+      try {
+        final sp = await SharedPreferences.getInstance();
+        await sp.setString('e2ee_$code', e2eeKey);
+      } catch (_) {}
+    }
 
+    // Check if the entered room/link is a future scheduled meeting (for invitees / reminder flow)
+    final info = await ApiService.fetchPublicMeetingInfo(code);
+    if (!mounted) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (info != null && info['isFutureScheduled'] == true && info['scheduledTimeTs'] != null) {
+      final ts = int.tryParse(info['scheduledTimeTs'].toString()) ?? 0;
+      if (ts > 0) {
+        final schedDt = DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true).toLocal();
+        final existingRem = info['myReminder'] is Map ? (info['myReminder']['reminderMinutes'] as int?) : null;
+        final bool isPerm = info['isPermanent'] == true || info['meetingType'] == 'permanent';
+        await UpcomingMeetingInviteSheet.show(
+          context,
+          roomId: code,
+          e2eeKey: e2eeKey,
+          title: info['title']?.toString() ?? 'La-Vie Conference',
+          hostName: info['hostName']?.toString() ?? 'La-Vie Host',
+          hostId: info['hostId']?.toString() ?? '',
+          scheduledTime: schedDt,
+          existingReminderMinutes: existingRem,
+          isPermanent: isPerm,
+        );
+        return;
+      }
+    }
+
+    final displayName = user?.displayName ?? 'Premium User';
     final prefs = await showPreJoinDialog(context);
     if (prefs == null || !mounted) return;
 
-    bool isHost = false;
-    String? meetingTitle;
-    if (user != null) {
+    bool isHost = info != null && user != null && info['hostId'] == user.uid;
+    String? meetingTitle = info?['title']?.toString();
+
+    if (user != null && info == null) {
       try {
         final docDirect = await FirebaseFirestore.instance.collection('meetings').doc(code).get();
         if (docDirect.exists && docDirect.data() != null) {
@@ -120,11 +180,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
 
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => VideoRoomScreen(
-          roomName: code,
+          roomName: (e2eeKey != null && e2eeKey.isNotEmpty) ? '$code#$e2eeKey' : code,
           meetingTitle: meetingTitle,
           participantName: displayName,
           initialAudioOn: prefs['audio'] ?? true,
@@ -158,7 +219,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: meetingTitle,
         roomId: roomId,
         hostId: user?.uid ?? '',
+        hostName: displayName,
         scheduledTime: DateTime.now(),
+        status: 'active',
+        meetingType: 'instant',
+        requireApproval: prefs['requireApproval'] == true,
       );
       await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
     } catch (e) {
@@ -280,6 +345,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _createMeetingLinkForLater();
                     },
                   ),
+                  const SizedBox(height: 12),
+
+                  // Option 4: Create Permanent Room (Always Open)
+                  _buildMeetingOptionTile(
+                    icon: Icons.all_inclusive_rounded,
+                    iconColor: const Color(0xFFFFB300),
+                    title: 'Create a permanent room',
+                    subtitle: 'Always open evergreen link • No countdown timers',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _showCreatePermanentRoomDialog();
+                    },
+                  ),
                 ],
               ),
             ),
@@ -351,213 +429,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // SCHEDULE MEETING DIALOG
   // ==========================================
   void _showScheduleMeetingDialog() {
-    final TextEditingController titleController = TextEditingController();
-    DateTime selectedDate = DateTime.now();
-    TimeOfDay selectedTime = TimeOfDay.now();
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return Dialog(
-              backgroundColor: Colors.transparent,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                  child: Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A).withOpacity(0.96),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: const Color(0xFF5C00FF).withOpacity(0.4), width: 1.5),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF5C00FF).withOpacity(0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.event_available, color: Color(0xFF00E5FF), size: 36),
-                        ),
-                        const SizedBox(height: 14),
-                        const Text(
-                          'Schedule Meeting',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TextField(
-                          controller: titleController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Meeting Title (e.g. Sunday Service)',
-                            hintStyle: TextStyle(color: Colors.white.withOpacity(0.35)),
-                            filled: true,
-                            fillColor: Colors.white.withOpacity(0.05),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                              borderSide: const BorderSide(color: Color(0xFF00E5FF), width: 1.5),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () async {
-                                  final DateTime? pickedDate = await showDatePicker(
-                                    context: context,
-                                    initialDate: selectedDate,
-                                    firstDate: DateTime.now(),
-                                    lastDate: DateTime(2101),
-                                  );
-                                  if (pickedDate != null) {
-                                    setDialogState(() => selectedDate = pickedDate);
-                                  }
-                                },
-                                icon: const Icon(Icons.calendar_today, size: 16),
-                                label: Text(DateFormat('MMM d, yyyy').format(selectedDate), style: const TextStyle(fontSize: 12)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white.withOpacity(0.08),
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () async {
-                                  final TimeOfDay? pickedTime = await showTimePicker(
-                                    context: context,
-                                    initialTime: selectedTime,
-                                  );
-                                  if (pickedTime != null) {
-                                    setDialogState(() => selectedTime = pickedTime);
-                                  }
-                                },
-                                icon: const Icon(Icons.access_time, size: 16),
-                                label: Text(selectedTime.format(context), style: const TextStyle(fontSize: 12)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white.withOpacity(0.08),
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 22),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(dialogCtx),
-                                child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              flex: 2,
-                              child: ElevatedButton(
-                                onPressed: () async {
-                                  final title = titleController.text.trim();
-                                  if (title.isEmpty) return;
-
-                                  final scheduledDateTime = DateTime(
-                                    selectedDate.year,
-                                    selectedDate.month,
-                                    selectedDate.day,
-                                    selectedTime.hour,
-                                    selectedTime.minute,
-                                  );
-
-                                  final roomId = _generateRoomCode();
-                                  final e2eeKey = _generateE2EEKey();
-                                  
-                                  final prefs = await SharedPreferences.getInstance();
-                                  await prefs.setString('e2ee_$roomId', e2eeKey);
-
-                                  final hostId = FirebaseAuth.instance.currentUser?.uid ?? '';
-
-                                  final meeting = Meeting(
-                                    id: roomId,
-                                    title: title,
-                                    roomId: roomId,
-                                    hostId: hostId,
-                                    scheduledTime: scheduledDateTime,
-                                  );
-
-                                  await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
-
-                                  final notificationId = roomId.hashCode;
-                                  NotificationService().showImmediateNotification(
-                                    id: notificationId,
-                                    title: 'Meeting Scheduled',
-                                    body: '$title is set for ${DateFormat('MMM d, h:mm a').format(scheduledDateTime)}',
-                                  );
-
-                                  final reminderTime = scheduledDateTime.subtract(const Duration(minutes: 15));
-                                  NotificationService().scheduleMeetingReminder(
-                                    id: notificationId + 1,
-                                    title: 'Upcoming Meeting: $title',
-                                    body: 'Starts in 15 minutes',
-                                    scheduledDate: reminderTime,
-                                  );
-
-                                  final success = await _createGoogleCalendarEvent(title, scheduledDateTime, roomId, e2eeKey);
-                                  
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(this.context).showSnackBar(
-                                      SnackBar(
-                                        backgroundColor: const Color(0xFF00FFA3),
-                                        content: Text(
-                                          success ? '🎉 Meeting scheduled & synced to Google Calendar!' : '🎉 Meeting scheduled successfully!',
-                                          style: const TextStyle(color: Color(0xFF070B19), fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    );
-                                  }
-
-                                  Navigator.pop(dialogCtx);
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF00E5FF),
-                                  foregroundColor: const Color(0xFF070B19),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                ),
-                                child: const Text('Schedule', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+    ScheduleMeetingDialog.show(context);
   }
 
   // ==========================================
@@ -578,11 +450,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       title: '$displayName\'s Meeting',
       roomId: roomId,
       hostId: hostId,
+      hostName: displayName,
       scheduledTime: DateTime.now(),
+      status: 'scheduled',
+      meetingType: 'scheduled',
+      notified: true,
     );
     await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(meeting.toFirestore(), SetOptions(merge: true));
 
-    final meetingLink = 'https://la-vie.lifechangerstouch.org/?room=$roomId#$e2eeKey';
+    final meetingLink = CalendarHelper.buildInviteLink(roomId, e2eeKey: e2eeKey);
 
     if (!mounted) return;
     showDialog(
@@ -675,6 +551,377 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             label: const Text('Share Link', style: TextStyle(fontWeight: FontWeight.bold)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF00FFA3),
+                              foregroundColor: const Color(0xFF070B19),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ==========================================
+  // CREATE PERMANENT ROOM DIALOG
+  // ==========================================
+  void _showCreatePermanentRoomDialog() {
+    final user = FirebaseAuth.instance.currentUser;
+    final displayName = user?.displayName ?? 'Premium User';
+    final nameCtrl = TextEditingController(text: '$displayName\'s Permanent Room');
+    bool requireApproval = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A).withOpacity(0.96),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: const Color(0xFFFFB300).withOpacity(0.4), width: 1.5),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFB300).withOpacity(0.18),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.all_inclusive_rounded, color: Color(0xFFFFB300), size: 24),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Create Permanent Room',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'Always open • Reusable evergreen link',
+                                    style: TextStyle(
+                                      color: Color(0xFFFFB300),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        const Text(
+                          'Room Name',
+                          style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: nameCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: 'e.g. Weekly Sync Room',
+                            hintStyle: const TextStyle(color: Colors.white38),
+                            filled: true,
+                            fillColor: Colors.white.withOpacity(0.06),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: Color(0xFFFFB300)),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.shield_outlined, color: Colors.white70, size: 20),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Require Host Approval',
+                                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                                    ),
+                                    Text(
+                                      'Guests must be admitted by host',
+                                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Switch(
+                                value: requireApproval,
+                                activeColor: const Color(0xFFFFB300),
+                                onChanged: (val) {
+                                  setDialogState(() {
+                                    requireApproval = val;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(dialogCtx),
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text('Cancel', style: TextStyle(color: Colors.white54, fontSize: 14)),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 2,
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  final roomTitle = nameCtrl.text.trim().isNotEmpty
+                                      ? nameCtrl.text.trim()
+                                      : '$displayName\'s Permanent Room';
+                                  Navigator.pop(dialogCtx);
+                                  await _createAndShowPermanentRoom(
+                                    title: roomTitle,
+                                    requireApproval: requireApproval,
+                                  );
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFFFB300),
+                                  foregroundColor: const Color(0xFF070B19),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text(
+                                  'Create Room',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _createAndShowPermanentRoom({
+    required String title,
+    required bool requireApproval,
+  }) async {
+    final rawCode = _generateRoomCode();
+    final roomId = 'perm-$rawCode';
+    final e2eeKey = _generateE2EEKey();
+    final user = FirebaseAuth.instance.currentUser;
+    final displayName = user?.displayName ?? 'Premium User';
+    final hostId = user?.uid ?? '';
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('e2ee_$roomId', e2eeKey);
+
+      final meeting = Meeting(
+        id: roomId,
+        title: title,
+        roomId: roomId,
+        hostId: hostId,
+        hostName: displayName,
+        scheduledTime: DateTime.now(),
+        status: 'active',
+        meetingType: 'permanent',
+        isPermanent: true,
+        requireApproval: requireApproval,
+        notified: true,
+      );
+      await FirebaseFirestore.instance.collection('meetings').doc(roomId).set(
+        meeting.toFirestore(),
+        SetOptions(merge: true),
+      );
+    } catch (e) {
+      debugPrint('Error saving permanent room: $e');
+    }
+
+    final meetingLink = CalendarHelper.buildInviteLink(roomId, e2eeKey: e2eeKey);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.96),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFFFFB300).withOpacity(0.4), width: 1.5),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFB300).withOpacity(0.18),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.all_inclusive_rounded, color: Color(0xFFFFB300), size: 30),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Permanent Room Ready!',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      title,
+                      style: const TextStyle(color: Color(0xFFFFB300), fontSize: 14, fontWeight: FontWeight.w600),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'This evergreen room is always open and never expires. Anyone with this link or code can join anytime until you delete the room.',
+                      style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12, height: 1.4),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Room Code: $roomId',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  meetingLink,
+                                  style: const TextStyle(color: Color(0xFFFFB300), fontSize: 12),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy, color: Color(0xFFFFB300), size: 20),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: meetingLink));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Permanent link copied to clipboard!'),
+                                  backgroundColor: Color(0xFFFFB300),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Share.share('Join my permanent meeting room on La-Vie Conference:\n$meetingLink\n\nRoom ID: $roomId\n(Always open • Join anytime)');
+                            },
+                            icon: const Icon(Icons.share, size: 16),
+                            label: const Text('Share'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(dialogCtx);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => VideoRoomScreen(
+                                    roomName: roomId,
+                                    meetingTitle: title,
+                                    participantName: displayName,
+                                    initialAudioOn: true,
+                                    initialVideoOn: true,
+                                    isHost: true,
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.login, size: 16),
+                            label: const Text('Enter Room Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFFB300),
                               foregroundColor: const Color(0xFF070B19),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -834,59 +1081,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: ElevatedButton(
-                            onPressed: () async {
-                              String code = _codeController.text.trim();
-                              // Simple URL extraction if user pastes full url
-                              if (code.contains('/')) {
-                                code = code.split('/').last;
-                              }
-                              if (code.contains('?')) {
-                                code = code.split('?').first;
-                              }
-                              if (code.isNotEmpty) {
+                            onPressed: () {
+                              final raw = _codeController.text.trim();
+                              if (raw.isNotEmpty) {
                                 Navigator.pop(dialogContext);
-                                final user = FirebaseAuth.instance.currentUser;
-                                final displayName = user?.displayName ?? 'Premium User';
-                                
-                                final prefs = await showPreJoinDialog(context);
-                                if (prefs == null) return;
-                                
-                                bool isHost = false;
-                                String? meetingTitle;
-                                if (user != null) {
-                                  try {
-                                    final docDirect = await FirebaseFirestore.instance.collection('meetings').doc(code).get();
-                                    if (docDirect.exists && docDirect.data() != null) {
-                                      final data = docDirect.data()!;
-                                      isHost = data['hostId'] == user.uid;
-                                      meetingTitle = data['title'] as String?;
-                                    } else {
-                                      final query = await FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: code).limit(1).get();
-                                      if (query.docs.isNotEmpty) {
-                                        final data = query.docs.first.data();
-                                        isHost = data['hostId'] == user.uid;
-                                        meetingTitle = data['title'] as String?;
-                                      }
-                                    }
-                                  } catch (e) {
-                                    debugPrint('Failed to check host status: $e');
-                                  }
-                                }
-                                
-                                if (!mounted) return;
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => VideoRoomScreen(
-                                      roomName: code,
-                                      meetingTitle: meetingTitle,
-                                      participantName: displayName,
-                                      initialAudioOn: prefs['audio'] ?? true,
-                                      initialVideoOn: prefs['video'] ?? true,
-                                      isHost: isHost,
-                                    ),
-                                  ),
-                                );
+                                _joinMeetingByRawInput(raw);
                               }
                             },
                             style: ElevatedButton.styleFrom(
@@ -1166,14 +1365,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 )
                               ],
                             ),
-                            child: Center(
-                              child: Text(
-                                initial,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
-                                ),
+                            child: ClipOval(
+                              child: Builder(
+                                builder: (context) {
+                                  final user = Firebase.apps.isNotEmpty ? FirebaseAuth.instance.currentUser : null;
+                                  final avatarUrl = _cachedAvatarUrl ?? _normalizeAvatarUrl(user?.photoURL);
+                                  final initialWidget = Center(
+                                    child: Text(
+                                      initial,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  );
+                                  if (avatarUrl == null || avatarUrl.isEmpty) {
+                                    return initialWidget;
+                                  }
+                                  return Image.network(
+                                    avatarUrl,
+                                    width: 48,
+                                    height: 48,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => initialWidget,
+                                  );
+                                },
                               ),
                             ),
                           ),
@@ -1318,27 +1535,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             
                             const SizedBox(height: 16),
                             
-                            // StreamBuilder for Live Meetings
-                            StreamBuilder<QuerySnapshot>(
-                              stream: FirebaseFirestore.instance
-                                  .collection('meetings')
-                                  .where('hostId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-                                  .orderBy('scheduledTime')
-                                  .limit(3)
-                                  .snapshots(),
+                            // StreamBuilder for Upcoming & Invited Meetings
+                            StreamBuilder<List<Meeting>>(
+                              stream: Meeting.streamUserMeetings(FirebaseAuth.instance.currentUser?.uid),
                               builder: (context, snapshot) {
                                 if (snapshot.hasError) {
-                                  final errStr = snapshot.error.toString();
-                                  if (errStr.contains('failed-precondition') || errStr.contains('requires an index')) {
-                                    return const Padding(
-                                      padding: EdgeInsets.symmetric(vertical: 16.0),
-                                      child: Text(
-                                        'Database index required. Please check your console logs for the Firebase index creation link.',
-                                        style: TextStyle(color: Colors.amber, fontSize: 13),
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    );
-                                  }
                                   return const Padding(
                                     padding: EdgeInsets.symmetric(vertical: 16.0),
                                     child: Text(
@@ -1352,8 +1553,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   return const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)));
                                 }
 
-                                final docs = snapshot.data?.docs ?? [];
-                                if (docs.isEmpty) {
+                                final allMeetings = snapshot.data ?? [];
+                                final topMeetings = allMeetings.take(3).toList();
+                                if (topMeetings.isEmpty) {
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 20),
                                     child: Text(
@@ -1363,11 +1565,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   );
                                 }
 
+                                final currentUid = FirebaseAuth.instance.currentUser?.uid;
                                 return Column(
-                                  children: docs.map((doc) {
-                                    final meeting = Meeting.fromFirestore(doc);
+                                  children: topMeetings.map((meeting) {
                                     final formattedTime = DateFormat('MMM d, yyyy • h:mm a').format(meeting.scheduledTime);
-                                    
+                                    final bool isHost = meeting.hostId == currentUid || meeting.role == 'host';
+                                    final bool isFuture = meeting.scheduledTime.isAfter(DateTime.now());
+                                    final displayHost = meeting.hostName.isNotEmpty
+                                        ? meeting.hostName
+                                        : (isHost ? (FirebaseAuth.instance.currentUser?.displayName ?? 'You') : 'La-Vie Host');
+
                                     return Container(
                                       margin: const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(16),
@@ -1382,31 +1589,121 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           Row(
                                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                             children: [
-                                              Text(
-                                                meeting.title,
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.bold,
+                                              Expanded(
+                                                child: Row(
+                                                  children: [
+                                                    Flexible(
+                                                      child: Text(
+                                                        meeting.title,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 18,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                                      decoration: BoxDecoration(
+                                                        color: isHost
+                                                            ? const Color(0xFF00E5FF).withOpacity(0.14)
+                                                            : const Color(0xFF00FFA3).withOpacity(0.14),
+                                                        borderRadius: BorderRadius.circular(10),
+                                                      ),
+                                                      child: Text(
+                                                        isHost ? 'HOST' : 'INVITED',
+                                                        style: TextStyle(
+                                                          color: isHost ? const Color(0xFF00E5FF) : const Color(0xFF00FFA3),
+                                                          fontSize: 9.5,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
                                               Row(
                                                 children: [
-                                                  Icon(Icons.access_time, color: Colors.white.withOpacity(0.5), size: 20),
-                                                  const SizedBox(width: 8),
-                                                  Icon(Icons.calendar_today, color: Colors.white.withOpacity(0.5), size: 20),
+                                                  if (isFuture || meeting.isPermanent)
+                                                    InkWell(
+                                                      onTap: () async {
+                                                        final sp = await SharedPreferences.getInstance();
+                                                        final key = sp.getString('e2ee_${meeting.roomId}');
+                                                        if (context.mounted) {
+                                                          UpcomingMeetingInviteSheet.show(
+                                                            context,
+                                                            roomId: meeting.roomId,
+                                                            e2eeKey: key,
+                                                            title: meeting.title,
+                                                            hostName: displayHost,
+                                                            hostId: meeting.hostId,
+                                                            scheduledTime: meeting.scheduledTime,
+                                                            existingReminderMinutes: meeting.hostReminderMinutes,
+                                                            isPermanent: meeting.isPermanent,
+                                                          );
+                                                        }
+                                                      },
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.all(4.0),
+                                                        child: Icon(
+                                                          meeting.isPermanent ? Icons.all_inclusive_rounded : Icons.notifications_active_outlined,
+                                                          color: meeting.isPermanent ? const Color(0xFFFFB300) : const Color(0xFF00FFA3),
+                                                          size: 20,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  if (!meeting.isPermanent) ...[
+                                                    const SizedBox(width: 6),
+                                                    InkWell(
+                                                      onTap: () async {
+                                                        final sp = await SharedPreferences.getInstance();
+                                                        final key = sp.getString('e2ee_${meeting.roomId}');
+                                                        await CalendarHelper.addMeetingToGoogleCalendar(
+                                                          title: meeting.title,
+                                                          startTime: meeting.scheduledTime,
+                                                          roomId: meeting.roomId,
+                                                          e2eeKey: key,
+                                                          hostName: displayHost,
+                                                          reminderMinutes: meeting.hostReminderMinutes,
+                                                          allowInteractiveFallback: true,
+                                                        );
+                                                      },
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.all(4.0),
+                                                        child: Icon(Icons.calendar_today, color: Colors.white.withOpacity(0.75), size: 18),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ],
                                               )
                                             ],
                                           ),
                                           const SizedBox(height: 8),
-                                          Text(
-                                            formattedTime,
-                                            style: TextStyle(
-                                              color: Colors.white.withOpacity(0.7),
-                                              fontSize: 14,
+                                          if (meeting.isPermanent)
+                                            const Row(
+                                              children: [
+                                                Icon(Icons.all_inclusive_rounded, color: Color(0xFFFFB300), size: 14),
+                                                SizedBox(width: 4),
+                                                Text(
+                                                  'Permanent Room • Always Open',
+                                                  style: TextStyle(
+                                                    color: Color(0xFFFFB300),
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ],
+                                            )
+                                          else
+                                            Text(
+                                              formattedTime,
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.7),
+                                                fontSize: 14,
+                                              ),
                                             ),
-                                          ),
                                           const SizedBox(height: 4),
                                           Text(
                                             'Room ID: ${meeting.roomId}',
@@ -1438,13 +1735,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                               ),
                                               Row(
                                                 children: [
-                                                  Container(
-                                                    padding: const EdgeInsets.all(8),
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.white.withOpacity(0.1),
-                                                      shape: BoxShape.circle,
+                                                  InkWell(
+                                                    onTap: () async {
+                                                      final sp = await SharedPreferences.getInstance();
+                                                      final key = sp.getString('e2ee_${meeting.roomId}');
+                                                      final url = CalendarHelper.buildInviteLink(meeting.roomId, e2eeKey: key);
+                                                      Share.share('Join "${meeting.title}" on La-Vie Conference ($formattedTime):\n$url');
+                                                    },
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.white.withOpacity(0.1),
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                      child: const Icon(Icons.share, color: Colors.white, size: 18),
                                                     ),
-                                                    child: const Icon(Icons.videocam, color: Colors.white, size: 20),
                                                   ),
                                                   const SizedBox(width: 8),
                                                   GestureDetector(
@@ -1461,7 +1766,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                             participantName: FirebaseAuth.instance.currentUser?.displayName ?? 'Premium User',
                                                             initialAudioOn: prefs['audio'] ?? true,
                                                             initialVideoOn: prefs['video'] ?? true,
-                                                            isHost: meeting.hostId == FirebaseAuth.instance.currentUser?.uid,
+                                                            isHost: isHost,
                                                           ),
                                                         ),
                                                       );

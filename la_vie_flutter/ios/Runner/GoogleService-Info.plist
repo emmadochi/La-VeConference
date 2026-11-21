@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>563333021985-64nvrh1mvbac09r9eipphve6b2e050dd.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyC2Rq1Ys0FyYns400rbxw6uv6OGknuBl1o</string>
+	<key>GCM_SENDER_ID</key>
+	<string>563333021985</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>org.lifechangerstouch.lavie</string>
+	<key>PROJECT_ID</key>
+	<string>lifeconference-e0add</string>
+	<key>STORAGE_BUCKET</key>
+	<string>lifeconference-e0add.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:563333021985:ios:cfbc7b05169928a2a13e60</string>
+</dict>
+</plist>

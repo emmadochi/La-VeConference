@@ -1,6 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'login_screen.dart';
 
 class PrivacySecurityScreen extends StatefulWidget {
@@ -77,6 +79,18 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
+        final uid = user.uid;
+        // 1. Purge Firestore data
+        try {
+          await FirebaseFirestore.instance.collection('users').doc(uid).delete();
+        } catch (_) {}
+
+        // 2. Clear Google Sign-In session
+        try {
+          await GoogleSignIn.instance.signOut();
+        } catch (_) {}
+
+        // 3. Delete auth account
         await user.delete();
         if (mounted) {
           Navigator.pushAndRemoveUntil(

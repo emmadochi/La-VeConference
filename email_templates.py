@@ -536,13 +536,21 @@ def render_support_reply_email(
 """
 
 
-def render_otp_password_reset_email(
-    user_name: str,
+def _render_otp_email(
+    *,
+    title: str,
+    badge_text: str,
+    heading: str,
+    greeting_name: str,
+    intro_text: str,
+    instruction_text: str,
+    warning_title: str,
+    warning_text: str,
     otp_code: str,
-    expiry_minutes: int = 10
+    expiry_minutes: int = 10,
 ) -> str:
-    """Renders a high-security dark-mode OTP verification email with glowing 6-digit code box."""
-    display_name = user_name if user_name and user_name.strip() else "Valued Member"
+    """Shared branded dark-mode 6-digit OTP verification email layout."""
+    display_name = greeting_name if greeting_name and greeting_name.strip() else "Valued Member"
     spaced_otp = "  ".join(list(otp_code))
 
     return f"""<!DOCTYPE html>
@@ -550,7 +558,7 @@ def render_otp_password_reset_email(
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Password Reset Code: {otp_code}</title>
+    <title>{title}: {otp_code}</title>
     <style type="text/css">
         {get_base_styles()}
     </style>
@@ -559,16 +567,16 @@ def render_otp_password_reset_email(
     <center style="width: 100%; background-color: #070B19; padding: 32px 0;">
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" class="email-container" style="max-width: 600px; margin: 0 auto; background-color: #0E1326; border-radius: 18px; border: 1px solid rgba(0, 229, 255, 0.35); overflow: hidden; box-shadow: 0 12px 36px rgba(0,0,0,0.65);">
             
-            {get_header_html(badge_text="🔒 SECURITY VERIFICATION", badge_color="#00E5FF")}
+            {get_header_html(badge_text=badge_text, badge_color="#00E5FF")}
 
             <!-- CONTENT -->
             <tr>
                 <td class="content-padding" style="padding: 20px 40px 28px 40px; color: #C9D1D9; font-size: 15px; line-height: 1.65; text-align: center;">
                     <h1 style="color: #FFFFFF; font-size: 24px; font-weight: 800; margin: 0 0 12px 0; letter-spacing: -0.5px;">
-                        Password Reset Verification
+                        {heading}
                     </h1>
                     <p style="color: #8B949E; font-size: 14px; margin: 0 0 24px 0;">
-                        Hello <strong style="color: #FFFFFF;">{display_name}</strong>, we received a request to reset the password for your La-Vie account.
+                        Hello <strong style="color: #FFFFFF;">{display_name}</strong>, {intro_text}
                     </p>
 
                     <!-- 6-DIGIT OTP BOX -->
@@ -585,12 +593,12 @@ def render_otp_password_reset_email(
                     </div>
 
                     <p style="color: #C9D1D9; font-size: 14px; margin: 0 0 16px 0;">
-                        Enter this code in the mobile app or browser prompt to choose a new password.
+                        {instruction_text}
                     </p>
 
                     <!-- SECURITY WARNING -->
                     <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 14px; font-size: 12px; color: #8B949E; text-align: left; line-height: 1.5;">
-                        <strong style="color: #FFFFFF;">⚠️ Didn't request this code?</strong> If you did not initiate a password reset, you can safely ignore this email. Your password will remain unchanged and your account stays secure.
+                        <strong style="color: #FFFFFF;">⚠️ {warning_title}</strong> {warning_text}
                     </div>
                 </td>
             </tr>
@@ -602,5 +610,45 @@ def render_otp_password_reset_email(
 </body>
 </html>
 """
+
+
+def render_otp_password_reset_email(
+    user_name: str,
+    otp_code: str,
+    expiry_minutes: int = 10
+) -> str:
+    """Renders a high-security dark-mode OTP verification email for password reset."""
+    return _render_otp_email(
+        title="Password Reset Code",
+        badge_text="🔒 SECURITY VERIFICATION",
+        heading="Password Reset Verification",
+        greeting_name=user_name,
+        intro_text="we received a request to reset the password for your La-Vie account.",
+        instruction_text="Enter this code in the mobile app or browser prompt to choose a new password.",
+        warning_title="Didn't request this code?",
+        warning_text="If you did not initiate a password reset, you can safely ignore this email. Your password will remain unchanged and your account stays secure.",
+        otp_code=otp_code,
+        expiry_minutes=expiry_minutes,
+    )
+
+
+def render_otp_signup_email(
+    user_name: str,
+    otp_code: str,
+    expiry_minutes: int = 10
+) -> str:
+    """Renders a dark-mode 6-digit OTP email for verifying a new user sign-up."""
+    return _render_otp_email(
+        title="Email Verification Code",
+        badge_text="✨ ACCOUNT VERIFICATION",
+        heading="Verify Your Email Address",
+        greeting_name=user_name,
+        intro_text="welcome to La-Vie! Please confirm your email address to activate your new account.",
+        instruction_text="Enter this 6-digit code in the mobile app or browser sign-up dialog to finish creating your account.",
+        warning_title="Didn't sign up for La-Vie?",
+        warning_text="If you did not create an account, you can safely ignore this email and no account will be registered.",
+        otp_code=otp_code,
+        expiry_minutes=expiry_minutes,
+    )
 
 

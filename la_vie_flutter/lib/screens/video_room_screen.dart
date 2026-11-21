@@ -18,6 +18,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../api_service.dart';
 import '../utils/error_utils.dart';
+import '../services/notification_service.dart';
+import '../widgets/reaction_particle_overlay.dart';
+import '../main_layout.dart';
 
 /// Represents the active audio output route during a call.
 enum AudioRoute { speaker, earpiece, bluetooth, wiredHeadset }
@@ -58,11 +61,14 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   String? _meetingHostId;
   bool get _effectiveIsHost => widget.isHost || (_meetingHostId != null && FirebaseAuth.instance.currentUser?.uid != null && _meetingHostId == FirebaseAuth.instance.currentUser?.uid);
   bool _isRoomInitialized = false;
+  bool _isExiting = false;
   AlreadyInMeetingException? _conflictException;
   bool _isLoading = true;
   String? _error;
   late bool _isMuted;
   late bool _isVideoOff;
+  bool _isTogglingMic = false;
+  bool _isTogglingCamera = false;
   bool _isScreenSharing = false;
   bool _isRecording = false;
   AudioRecorder? _audioRecorder;
@@ -80,6 +86,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   List<MediaDevice> _availableAudioOutputs = [];
   StreamSubscription<List<MediaDevice>>? _deviceChangeSubscription;
   bool _isRoomLocked = false;
+  bool _isWaitingRoomEnabled = false;
+  bool _isWaitingForHostApproval = false;
+  bool _isDeniedByHost = false;
+  String _waitingRoomMessage = 'Please wait — the host will let you in shortly.';
+  Timer? _waitingPollTimer;
+  StreamSubscription<QuerySnapshot>? _waitingRoomSub;
+  List<Map<String, dynamic>> _waitingGuests = [];
 
   Timer? _networkPoorTimer;
   DateTime? _networkPopupSnoozedUntil;
@@ -98,6 +111,9 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
 
   Set<String> _raisedHands = {};
   Map<String, String> _activeReactions = {};
+  final GlobalKey<ReactionParticleOverlayState> _reactionOverlayKey = GlobalKey<ReactionParticleOverlayState>();
+  Timer? _reactionBroadcastTimer;
+  final Map<String, int> _pendingReactions = {};
 
   bool _isFullScreen = false;
   bool _showFullScreenControls = true;
@@ -106,11 +122,19 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
 
   Timer? _meetingTimer;
   int? _roomStartedAtSec;
+  int? _scheduledTimeSec;
   String _meetingDurationText = "00:00";
 
-  void _startMeetingTimer(int? startedAtSec) {
+  bool get _isWaitingForScheduledStart {
+    if (_scheduledTimeSec == null) return false;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return nowSec < _scheduledTimeSec!;
+  }
+
+  void _startMeetingTimer(int? startedAtSec, {int? scheduledTimeSec}) {
     _meetingTimer?.cancel();
-    _roomStartedAtSec = startedAtSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    _scheduledTimeSec = scheduledTimeSec;
+    _roomStartedAtSec = startedAtSec;
     _updateMeetingDuration();
     _meetingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
@@ -119,8 +143,26 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   }
 
   void _updateMeetingDuration() {
-    if (_roomStartedAtSec == null) return;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    // Gate elapsed chronometer until scheduled start time arrives
+    if (_scheduledTimeSec != null && nowSec < _scheduledTimeSec!) {
+      final remaining = (_scheduledTimeSec! - nowSec).clamp(0, 86400 * 30);
+      final rHours = remaining ~/ 3600;
+      final rMins = (remaining % 3600) ~/ 60;
+      final rSecs = remaining % 60;
+      final countdown = rHours > 0
+          ? 'Starts in ${rHours.toString().padLeft(2, '0')}:${rMins.toString().padLeft(2, '0')}:${rSecs.toString().padLeft(2, '0')}'
+          : 'Starts in ${rMins.toString().padLeft(2, '0')}:${rSecs.toString().padLeft(2, '0')}';
+      if (_meetingDurationText != countdown) {
+        setState(() {
+          _meetingDurationText = countdown;
+        });
+      }
+      return;
+    }
+
+    _roomStartedAtSec ??= _scheduledTimeSec ?? nowSec;
     final elapsed = (nowSec - _roomStartedAtSec!).clamp(0, 86400 * 7);
     final hours = elapsed ~/ 3600;
     final mins = (elapsed % 3600) ~/ 60;
@@ -176,10 +218,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       final offCameraDefault = prefs.getBool('offCameraDefault') ?? false;
       final dataSaverMode = prefs.getBool('dataSaverMode') ?? false;
 
+      final bool effectiveAudioOn = widget.initialAudioOn && !muteMicDefault;
+      final bool effectiveVideoOn = widget.initialVideoOn && !offCameraDefault;
+
       if (mounted) {
         setState(() {
-          if (muteMicDefault) _isMuted = true;
-          if (offCameraDefault) _isVideoOff = true;
+          _isMuted = !effectiveAudioOn;
+          _isVideoOff = !effectiveVideoOn;
           _isDataSaverMode = dataSaverMode;
         });
       }
@@ -215,6 +260,9 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
           final data = doc.data() as Map<String, dynamic>;
           final hostId = data['hostId'] as String?;
           final title = data['title'] as String?;
+          final status = data['status'] as String?;
+          final currentUid = FirebaseAuth.instance.currentUser?.uid;
+
           if (mounted) {
             setState(() {
               _meetingHostId = hostId;
@@ -224,6 +272,13 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                 _displayMeetingTitle = "${widget.participantName}'s Meeting";
               }
             });
+          }
+
+          // If the host is joining their own scheduled or previously ended meeting, reactivate it
+          if (hostId != null && currentUid != null && hostId == currentUid && status == 'ended') {
+            FirebaseFirestore.instance.collection('meetings').doc(doc.id).set({
+              'status': 'scheduled',
+            }, SetOptions(merge: true)).catchError((e) => debugPrint('Error reactivating meeting: $e'));
           }
         }
       } catch (e) {
@@ -246,7 +301,10 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       final int? roomStartedAt = tokenDetails['room_started_at'] is int
           ? tokenDetails['room_started_at'] as int
           : (tokenDetails['room_started_at'] != null ? int.tryParse(tokenDetails['room_started_at'].toString()) : null);
-      _startMeetingTimer(roomStartedAt);
+      final int? scheduledTimeTs = tokenDetails['scheduled_time_ts'] is int
+          ? tokenDetails['scheduled_time_ts'] as int
+          : (tokenDetails['scheduled_time_ts'] != null ? int.tryParse(tokenDetails['scheduled_time_ts'].toString()) : null);
+      _startMeetingTimer(roomStartedAt, scheduledTimeSec: scheduledTimeTs);
       final livekitUrl = await ApiService.getLiveKitUrl();
       
       BaseKeyProvider? keyProvider;
@@ -261,10 +319,29 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       _listener.on<RoomEvent>((event) async {
         if (event is RoomDisconnectedEvent) {
           debugPrint('LiveKit Room Disconnected: ${event.reason}');
+          if (_isExiting) return;
+
           if (mounted) {
+            if (event.reason == DisconnectReason.clientInitiated) {
+              return;
+            }
+
+            String message;
+            if (event.reason == DisconnectReason.roomDeleted) {
+              message = 'Meeting has ended.';
+            } else if (event.reason == DisconnectReason.participantRemoved) {
+              message = 'You have been removed from the meeting by the host.';
+            } else if (event.reason == DisconnectReason.duplicateIdentity) {
+              message = 'You connected to this meeting from another session.';
+            } else if (event.reason == DisconnectReason.joinFailure) {
+              message = 'Unable to establish media connection. Please check your network.';
+            } else {
+              message = 'Connection to meeting lost. Please check your internet.';
+            }
+
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Meeting has ended.', style: TextStyle(color: Colors.white)),
+              SnackBar(
+                content: Text(message, style: const TextStyle(color: Colors.white)),
                 backgroundColor: Colors.redAccent,
               ),
             );
@@ -296,6 +373,21 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
               event.publication.unsubscribe();
             } catch (_) {}
           }
+          return;
+        }
+
+        if (event is TrackMutedEvent || event is TrackUnmutedEvent) {
+          final dynamic trackEvent = event;
+          if (_isRoomInitialized && trackEvent.participant == _room.localParticipant) {
+            _syncLocalMediaState();
+          } else if (mounted) {
+            setState(() {});
+          }
+          return;
+        }
+
+        if (event is LocalTrackPublishedEvent || event is LocalTrackUnpublishedEvent) {
+          _syncLocalMediaState();
           return;
         }
 
@@ -339,28 +431,40 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
           final decoded = utf8.decode(event.data);
 
           if (decoded == '__MUTE_ALL__') {
-            if (_room.localParticipant != null && _room.localParticipant!.isMicrophoneEnabled()) {
-              await _room.localParticipant!.setMicrophoneEnabled(false);
+            if (_room.localParticipant != null &&
+                (_isLocalMicLive() || _room.localParticipant!.isMicrophoneEnabled())) {
+              await _setLocalMicrophoneEnabled(false);
               if (mounted) {
-                setState(() {
-                  _isMuted = true;
-                });
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('The host has muted your microphone.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('The host has muted your microphone.', style: TextStyle(color: Colors.white)),
+                    backgroundColor: Colors.red,
+                  ),
+                );
               }
             }
             return;
           } else if (decoded.startsWith('__MUTE_PARTICIPANT__:')) {
             final targetId = decoded.substring('__MUTE_PARTICIPANT__:'.length);
             if (_room.localParticipant?.identity == targetId) {
-              if (_room.localParticipant != null && _room.localParticipant!.isMicrophoneEnabled()) {
-                await _room.localParticipant!.setMicrophoneEnabled(false);
+              if (_room.localParticipant != null &&
+                  (_isLocalMicLive() || _room.localParticipant!.isMicrophoneEnabled())) {
+                await _setLocalMicrophoneEnabled(false);
                 if (mounted) {
-                  setState(() {
-                    _isMuted = true;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('The host has muted your microphone.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('The host has muted your microphone.', style: TextStyle(color: Colors.white)),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
                 }
               }
+            }
+            return;
+          } else if (decoded.startsWith('__REQUEST_UNMUTE__:')) {
+            final targetId = decoded.substring('__REQUEST_UNMUTE__:'.length);
+            if (_room.localParticipant?.identity == targetId && mounted) {
+              _showUnmuteRequestDialog();
             }
             return;
           } else if (decoded == '__END_MEETING__') {
@@ -380,7 +484,19 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
             final data = jsonDecode(decoded);
             if (data is Map<String, dynamic>) {
               if (data['type'] == 'reaction') {
-                _showReaction(data['senderId'] ?? event.participant?.identity, data['emoji']);
+                final senderId = data['senderId'] ?? event.participant?.identity;
+                final emoji = data['emoji'] as String?;
+                final count = (data['count'] as num?)?.toInt() ?? 1;
+                if (emoji != null && mounted) {
+                  _showReaction(senderId, emoji);
+                  for (int i = 0; i < count; i++) {
+                    Future.delayed(Duration(milliseconds: i * 80), () {
+                      if (mounted) {
+                        _reactionOverlayKey.currentState?.spawnReaction(emoji);
+                      }
+                    });
+                  }
+                }
                 return;
               } else if (data['type'] == 'raise_hand') {
                 final senderId = data['senderId'] ?? event.participant?.identity;
@@ -524,24 +640,23 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
         }
       }
 
-      // Defensively initialize Camera & Microphone so permission denials do not crash the call
+      // Defensively initialize Camera & Microphone according to effectiveAudioOn / effectiveVideoOn
       try {
-        if (widget.initialVideoOn) {
-          await _room.localParticipant?.setCameraEnabled(true);
-        }
+        await _room.localParticipant?.setCameraEnabled(effectiveVideoOn);
       } catch (camErr) {
         debugPrint("Camera permission or initialization skipped: $camErr");
-        _isVideoOff = true;
       }
 
+      // Allow native audio subsystem 150ms to settle into VoIP mode
+      await Future.delayed(const Duration(milliseconds: 150));
+
       try {
-        if (widget.initialAudioOn) {
-          await _room.localParticipant?.setMicrophoneEnabled(true);
-        }
+        await _room.localParticipant?.setMicrophoneEnabled(effectiveAudioOn);
       } catch (micErr) {
         debugPrint("Microphone permission or initialization skipped: $micErr");
-        _isMuted = true;
       }
+
+      _syncLocalMediaState();
 
       // Start background foreground service so mic/audio capture continues when minimized
       _startBackgroundService();
@@ -564,6 +679,18 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
         debugPrint("Audio device enumeration error: $e");
       }
 
+      // VoIP Audio Watchdog: verify microphone transmission 1500ms after connection
+      Timer(const Duration(milliseconds: 1500), () async {
+        if (!mounted || !_isRoomInitialized) return;
+        if (!_isTogglingMic && !_isMuted && !_isLocalMicLive()) {
+          debugPrint("[VoIP Watchdog] Re-priming meeting microphone...");
+          await _setLocalMicrophoneEnabled(true, showError: false);
+          try {
+            await Hardware.instance.setSpeakerphoneOn(_currentAudioRoute == AudioRoute.speaker);
+          } catch (_) {}
+        }
+      });
+
       // Realtime listener for meeting document in Firestore
       _meetingSubscription?.cancel();
       _meetingSubscription = FirebaseFirestore.instance.collection('meetings').doc(actualRoomId).snapshots().listen((snapshot) {
@@ -579,7 +706,17 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
               }
             }
             if (data['status'] == 'ended') {
-              if (mounted && !_effectiveIsHost) {
+              DateTime? schedTime;
+              if (data['scheduledTime'] != null) {
+                try {
+                  schedTime = data['scheduledTime'] is Timestamp
+                      ? (data['scheduledTime'] as Timestamp).toDate()
+                      : DateTime.parse(data['scheduledTime'].toString());
+                } catch (_) {}
+              }
+              final isFutureScheduled = schedTime != null && schedTime.isAfter(DateTime.now());
+
+              if (!isFutureScheduled && mounted && !_effectiveIsHost) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('The host has ended the meeting for everyone.', style: TextStyle(color: Colors.white)),
@@ -594,12 +731,33 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                 _isRoomLocked = data['is_locked'] == true;
               });
             }
+            if (data.containsKey('requireApproval') && mounted) {
+              setState(() {
+                _isWaitingRoomEnabled = data['requireApproval'] == true;
+              });
+            }
           }
         }
       });
 
+      if (_effectiveIsHost) {
+        _startHostWaitingRoomMonitor(actualRoomId);
+      }
+
       if (mounted) {
         setState(() {
+          _isLoading = false;
+        });
+      }
+    } on WaitingApprovalException catch (waitEx) {
+      if (mounted) {
+        _enterWaitingRoomLobby(actualRoomId: waitEx.roomId, title: waitEx.title);
+      }
+    } on EntryDeniedException catch (deniedEx) {
+      if (mounted) {
+        setState(() {
+          _isWaitingForHostApproval = false;
+          _error = deniedEx.message;
           _isLoading = false;
         });
       }
@@ -670,6 +828,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
 
   Future<void> _stopBackgroundService() async {
     try {
+      _stopNativeScreenShareService();
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
       }
@@ -679,6 +838,8 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   }
 
   Future<void> _exitMeetingScreen() async {
+    if (_isExiting) return;
+    _isExiting = true;
     _meetingSubscription?.cancel();
     _stopBackgroundService();
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -700,6 +861,32 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       }
     }
 
+    final savedRoomId = widget.roomName;
+    final savedTitle = _displayMeetingTitle;
+    final savedDuration = _meetingDurationText;
+
+    // Build chat transcript from messages sent during meeting
+    String? chatTranscript;
+    if (_messagesNotifier.value.isNotEmpty) {
+      chatTranscript = _messagesNotifier.value.map((m) => '${m.sender}: ${m.message}').join('\n');
+    }
+
+    // Automatically trigger AI summary in background using chat transcript or metadata
+    if (chatTranscript != null && chatTranscript.trim().isNotEmpty) {
+      ApiService.generateMeetingSummary(
+        roomId: savedRoomId,
+        title: savedTitle,
+        transcriptText: chatTranscript,
+      ).catchError((e) {
+        debugPrint('Auto summary generation notice: $e');
+        return <String, dynamic>{};
+      });
+    }
+
+    final bool wasInCall = _isRoomInitialized;
+    _waitingPollTimer?.cancel();
+    _waitingRoomSub?.cancel();
+
     if (_isRoomInitialized) {
       try {
         _room.disconnect().catchError((_) {});
@@ -709,14 +896,139 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
       } else {
-        Navigator.of(context).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const MainLayout()),
+          (route) => false,
+        );
       }
+
+      if (wasInCall) {
+        // Send local push notification thanking user and linking to AI Summary & Notes screen
+        final bool leftBeforeStart = _isWaitingForScheduledStart;
+        NotificationService().showImmediateNotification(
+          id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          title: leftBeforeStart ? 'Scheduled Meeting Standby' : 'Thank you for joining $savedTitle!',
+          body: leftBeforeStart
+              ? '$savedTitle ($savedDuration) • Tap to view reminders & notifications.'
+              : 'Meeting ended ($savedDuration) • Tap to view your AI Summary & Notes.',
+          payload: 'open_notes',
+        );
+      }
+    }
+  }
+
+  void _enterWaitingRoomLobby({required String actualRoomId, required String title}) {
+    _waitingPollTimer?.cancel();
+    setState(() {
+      _isWaitingForHostApproval = true;
+      _isDeniedByHost = false;
+      _isLoading = false;
+      if (title.isNotEmpty) _displayMeetingTitle = title;
+      _waitingRoomMessage = 'Please wait — the host will review and let you in shortly.';
+    });
+
+    ApiService.knockRoom(actualRoomId);
+    _waitingPollTimer = Timer.periodic(const Duration(milliseconds: 2500), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final status = await ApiService.checkKnockStatus(actualRoomId);
+      if (!mounted) return;
+      if (status == 'admitted' || status == 'open') {
+        timer.cancel();
+        setState(() {
+          _isWaitingForHostApproval = false;
+          _isLoading = true;
+        });
+        _connectToRoom();
+      } else if (status == 'denied' || status == 'locked') {
+        timer.cancel();
+        setState(() {
+          _isDeniedByHost = true;
+          _waitingRoomMessage = status == 'locked'
+              ? 'The host has locked this meeting.'
+              : 'The host declined your request to enter this private meeting.';
+        });
+      }
+    });
+  }
+
+  void _startHostWaitingRoomMonitor(String actualRoomId) {
+    _waitingRoomSub?.cancel();
+    int previousCount = _waitingGuests.length;
+    _waitingRoomSub = FirebaseFirestore.instance
+        .collection('meetings')
+        .doc(actualRoomId)
+        .collection('waiting_room')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      final list = snap.docs.map((doc) {
+        final d = doc.data();
+        return <String, dynamic>{
+          'uid': d['uid'] ?? doc.id,
+          'name': d['name'] ?? 'Guest',
+          'email': d['email'] ?? '',
+          'photoUrl': d['photoUrl'] ?? '',
+        };
+      }).toList();
+      if (list.length > previousCount) {
+        HapticFeedback.mediumImpact();
+      }
+      previousCount = list.length;
+      setState(() {
+        _waitingGuests = list;
+      });
+    }, onError: (err) {
+      debugPrint('Waiting room monitor fallback note: $err');
+    });
+  }
+
+  Future<void> _decideWaitingGuest(String targetUid, String action) async {
+    final actualRoomId = widget.roomName.split('#').first.trim();
+    if (action == 'admit_all') {
+      setState(() => _waitingGuests = []);
+    } else {
+      setState(() {
+        _waitingGuests = _waitingGuests.where((g) => g['uid'] != targetUid).toList();
+      });
+    }
+    await ApiService.decideWaitingGuest(actualRoomId, targetUid, action);
+  }
+
+  Future<void> _toggleWaitingRoom() async {
+    if (!_effectiveIsHost) return;
+    final nextState = !_isWaitingRoomEnabled;
+    setState(() => _isWaitingRoomEnabled = nextState);
+    final ok = await ApiService.toggleWaitingRoom(widget.roomName, nextState);
+    if (!ok && mounted) {
+      setState(() => _isWaitingRoomEnabled = !nextState);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update waiting room setting.'), backgroundColor: Colors.redAccent),
+      );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            nextState
+                ? 'Private Waiting Room Enabled: New attendees require host approval.'
+                : 'Waiting Room Disabled: Attendees can join freely.',
+          ),
+          backgroundColor: nextState ? const Color(0xFF00E5FF).withOpacity(0.85) : Colors.white24,
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
   @override
   void dispose() {
     _meetingTimer?.cancel();
+    _waitingPollTimer?.cancel();
+    _waitingRoomSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _meetingSubscription?.cancel();
     _deviceChangeSubscription?.cancel();
@@ -794,13 +1106,38 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     }
   }
 
-  void _sendReaction(String emoji) async {
+  void _sendReaction(String emoji, {Offset? origin}) {
+    // 1. Instant local visual and haptic particle burst
+    _reactionOverlayKey.currentState?.spawnReaction(emoji, origin: origin);
     final identity = _room.localParticipant?.identity;
-    final payload = jsonEncode({'type': 'reaction', 'emoji': emoji, 'senderId': identity});
+    _showReaction(identity, emoji);
+
+    // 2. Queue for throttled network broadcast (max ~4 batches/sec)
+    _pendingReactions[emoji] = (_pendingReactions[emoji] ?? 0) + 1;
+    if (_reactionBroadcastTimer == null || !_reactionBroadcastTimer!.isActive) {
+      _reactionBroadcastTimer = Timer(const Duration(milliseconds: 250), _flushReactions);
+    }
+  }
+
+  void _flushReactions() async {
+    if (_pendingReactions.isEmpty) return;
+    final reactionsToSend = Map<String, int>.from(_pendingReactions);
+    _pendingReactions.clear();
+
+    final identity = _room.localParticipant?.identity;
     try {
-      await _room.localParticipant?.publishData(utf8.encode(payload), reliable: true);
-      _showReaction(identity, emoji);
-    } catch (_) {}
+      for (final entry in reactionsToSend.entries) {
+        final payload = jsonEncode({
+          'type': 'reaction',
+          'emoji': entry.key,
+          'count': entry.value,
+          'senderId': identity,
+        });
+        await _room.localParticipant?.publishData(utf8.encode(payload), reliable: false);
+      }
+    } catch (e) {
+      debugPrint('Error publishing reaction burst: $e');
+    }
   }
 
   void _toggleHandRaise() async {
@@ -856,29 +1193,191 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     try {
       await _room.localParticipant?.publishData(data);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Muted participant', style: TextStyle(color: Colors.white)), backgroundColor: Color(0xFF5C00FF)));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Muted participant', style: TextStyle(color: Colors.white)),
+          backgroundColor: Color(0xFF5C00FF),
+          duration: Duration(seconds: 2),
+        ));
       }
     } catch (e) {
       debugPrint('Failed to mute participant: $e');
     }
   }
 
-  void _toggleMute() async {
-    if (_room.localParticipant == null) return;
-    final isEnabled = _room.localParticipant!.isMicrophoneEnabled();
-    await _room.localParticipant!.setMicrophoneEnabled(!isEnabled);
+  void _requestUnmute(String participantId) async {
+    final data = utf8.encode('__REQUEST_UNMUTE__:$participantId');
+    try {
+      await _room.localParticipant?.publishData(data);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Sent unmute request to participant', style: TextStyle(color: Colors.white)),
+          backgroundColor: Color(0xFF00E5FF),
+          duration: Duration(seconds: 2),
+        ));
+      }
+    } catch (e) {
+      debugPrint('Failed to request unmute: $e');
+    }
+  }
+
+  void _showUnmuteRequestDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0B1226),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.mic, color: Color(0xFF00E5FF)),
+              SizedBox(width: 8),
+              Text('Unmute Microphone?', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            'The host has requested that you unmute your microphone to speak.',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Stay Muted', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(dialogCtx);
+                await _setLocalMicrophoneEnabled(true);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Unmute', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  bool _isLocalMicLive() {
+    if (!_isRoomInitialized) return false;
+    final lp = _room.localParticipant;
+    if (lp == null) return false;
+    final pub = lp.audioTrackPublications.firstOrNull;
+    return lp.isMicrophoneEnabled() && pub != null && !pub.muted;
+  }
+
+  bool _isLocalCamLive() {
+    if (!_isRoomInitialized) return false;
+    final lp = _room.localParticipant;
+    if (lp == null) return false;
+    final pub = lp.videoTrackPublications
+        .where((p) => p.source == TrackSource.camera)
+        .firstOrNull;
+    return lp.isCameraEnabled() && pub != null && !pub.muted && pub.track != null;
+  }
+
+  void _syncLocalMediaState() {
+    if (!_isRoomInitialized || !mounted) return;
+    final lp = _room.localParticipant;
+    if (lp == null) return;
+    final nextMuted = !_isLocalMicLive();
+    final nextVideoOff = !_isLocalCamLive();
     setState(() {
-      _isMuted = isEnabled;
+      _isMuted = nextMuted;
+      _isVideoOff = nextVideoOff;
     });
   }
 
-  void _toggleCamera() async {
-    if (_room.localParticipant == null) return;
-    final isEnabled = _room.localParticipant!.isCameraEnabled();
-    await _room.localParticipant!.setCameraEnabled(!isEnabled);
-    setState(() {
-      _isVideoOff = isEnabled;
-    });
+  Future<void> _setLocalMicrophoneEnabled(bool enable, {bool showError = true}) async {
+    if (!_isRoomInitialized) return;
+    final lp = _room.localParticipant;
+    if (lp == null || _isTogglingMic) return;
+
+    _isTogglingMic = true;
+    try {
+      await lp.setMicrophoneEnabled(enable);
+      if (!enable) {
+        // Belt-and-suspenders: ensure every published local audio track is muted
+        for (final pub in lp.audioTrackPublications) {
+          if (!pub.muted) {
+            await pub.mute();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to toggle microphone ($enable): $e');
+      if (showError && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              enable
+                  ? 'Could not turn on microphone. Check app permissions.'
+                  : 'Could not mute microphone: $e',
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      _isTogglingMic = false;
+      _syncLocalMediaState();
+    }
+  }
+
+  Future<void> _setLocalCameraEnabled(bool enable, {bool showError = true}) async {
+    if (!_isRoomInitialized) return;
+    final lp = _room.localParticipant;
+    if (lp == null || _isTogglingCamera) return;
+
+    _isTogglingCamera = true;
+    try {
+      await lp.setCameraEnabled(enable);
+      if (!enable) {
+        for (final pub in lp.videoTrackPublications) {
+          if (pub.source == TrackSource.camera && !pub.muted) {
+            await pub.mute();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to toggle camera ($enable): $e');
+      if (showError && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              enable
+                  ? 'Could not turn on camera. Check app permissions.'
+                  : 'Could not turn off camera: $e',
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      _isTogglingCamera = false;
+      _syncLocalMediaState();
+    }
+  }
+
+  Future<void> _toggleMute() async {
+    if (!_isRoomInitialized || _room.localParticipant == null) return;
+    final targetEnable = !_isLocalMicLive();
+    await _setLocalMicrophoneEnabled(targetEnable);
+  }
+
+  Future<void> _toggleCamera() async {
+    if (!_isRoomInitialized || _room.localParticipant == null) return;
+    final targetEnable = !_isLocalCamLive();
+    await _setLocalCameraEnabled(targetEnable);
   }
 
   bool _isFrontCamera = true;
@@ -947,21 +1446,42 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                 }
 
                 // 2. Perform backend & Firestore cleanup in background
-                // Delete instant meetings completely so they do not clutter dashboard; mark scheduled meetings as ended
-                final isInstant = roomId.toLowerCase().startsWith('la-vie-') || roomId.toLowerCase().startsWith('instant');
-                if (isInstant) {
-                  FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: roomId).get().then((snap) {
-                    for (final doc in snap.docs) {
-                      doc.reference.delete().catchError((_) {});
-                    }
-                  }).catchError((_) {});
-                  FirebaseFirestore.instance.collection('meetings').doc(roomId).delete().catchError((_) {});
-                } else {
-                  FirebaseFirestore.instance.collection('meetings').doc(roomId).set({
-                    'status': 'ended',
-                    'ended_at': FieldValue.serverTimestamp(),
-                  }, SetOptions(merge: true)).catchError((e) => debugPrint('Meeting status update error: $e'));
-                }
+                // Delete instant meetings completely so they do not clutter dashboard; mark scheduled meetings as ended;
+                // Keep permanent rooms alive ('active') across sessions so users can rejoin anytime.
+                FirebaseFirestore.instance.collection('meetings').doc(roomId).get().then((snap) {
+                  final mData = snap.data();
+                  final isPermanent = mData?['isPermanent'] == true || mData?['meetingType'] == 'permanent';
+                  final isScheduled = mData?['meetingType'] == 'scheduled' || mData?['scheduledTime'] != null;
+
+                  if (isPermanent) {
+                    // Permanent rooms stay active in Firestore so they persist until explicitly deleted by host
+                    FirebaseFirestore.instance.collection('meetings').doc(roomId).set({
+                      'status': 'active',
+                      'last_ended_at': FieldValue.serverTimestamp(),
+                    }, SetOptions(merge: true)).catchError((e) => debugPrint('Permanent room update error: $e'));
+                  } else if (!isScheduled && (mData?['meetingType'] == 'instant' || roomId.toLowerCase().startsWith('instant'))) {
+                    FirebaseFirestore.instance.collection('meetings').where('roomId', isEqualTo: roomId).get().then((querySnap) {
+                      for (final doc in querySnap.docs) {
+                        doc.reference.delete().catchError((_) {});
+                      }
+                    }).catchError((_) {});
+                    FirebaseFirestore.instance.collection('meetings').doc(roomId).delete().catchError((_) {});
+                  } else {
+                    FirebaseFirestore.instance.collection('meetings').doc(roomId).set({
+                      'status': 'ended',
+                      'ended_at': FieldValue.serverTimestamp(),
+                    }, SetOptions(merge: true)).catchError((e) => debugPrint('Meeting status update error: $e'));
+                  }
+                }).catchError((_) {
+                  // Fallback: safely mark as ended without deleting if not permanent
+                  final isPerm = roomId.startsWith('perm-');
+                  if (!isPerm) {
+                    FirebaseFirestore.instance.collection('meetings').doc(roomId).set({
+                      'status': 'ended',
+                      'ended_at': FieldValue.serverTimestamp(),
+                    }, SetOptions(merge: true)).catchError((e) => debugPrint('Meeting status fallback update error: $e'));
+                  }
+                });
 
                 FirebaseFirestore.instance.collection('users').where('active_room', isEqualTo: roomId).get().then((snap) {
                   for (final doc in snap.docs) {
@@ -1078,16 +1598,60 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     );
   }
 
+  static const MethodChannel _screenShareChannel =
+      MethodChannel('org.lifechangerstouch.lavie/screen_share');
+
+  Future<void> _startNativeScreenShareService() async {
+    if (Platform.isAndroid) {
+      try {
+        await _screenShareChannel.invokeMethod('startService');
+      } catch (e) {
+        debugPrint('Error starting native screen share service: $e');
+      }
+    }
+  }
+
+  Future<void> _stopNativeScreenShareService() async {
+    if (Platform.isAndroid) {
+      try {
+        await _screenShareChannel.invokeMethod('stopService');
+      } catch (e) {
+        debugPrint('Error stopping native screen share service: $e');
+      }
+    }
+  }
+
   void _toggleScreenShare() async {
-    final enabled = !_isScreenSharing;
+    final nextState = !_isScreenSharing;
     try {
       if (_room.localParticipant != null) {
-        await _room.localParticipant!.setScreenShareEnabled(enabled);
-        setState(() {
-          _isScreenSharing = enabled;
-        });
+        if (nextState) {
+          if (Platform.isAndroid) {
+            // Android 14+ MediaProjection permission request
+            final hasPermission = await rtc.Helper.requestCapturePermission();
+            if (!hasPermission) {
+              debugPrint('User dismissed or denied screen capture prompt.');
+              return;
+            }
+            // Start foreground service with mediaProjection type BEFORE WebRTC invokes getMediaProjection
+            await _startNativeScreenShareService();
+          }
+          await _room.localParticipant!.setScreenShareEnabled(true, captureScreenAudio: true);
+        } else {
+          await _room.localParticipant!.setScreenShareEnabled(false);
+          await _stopNativeScreenShareService();
+        }
+
+        if (mounted) {
+          setState(() {
+            _isScreenSharing = nextState;
+          });
+        }
       }
     } catch (e) {
+      if (nextState) {
+        await _stopNativeScreenShareService();
+      }
       final info = ErrorUtils.parseMeetingError(e);
       if (!info.isCancellation) {
         debugPrint('Failed to toggle screen share: $e');
@@ -1433,7 +1997,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     );
 
     try {
-      final res = await ApiService.generateMeetingSummary(
+      await ApiService.generateMeetingSummary(
         roomId: widget.roomName,
         title: widget.meetingTitle ?? 'Meeting ${widget.roomName}',
         audioPath: audioPath,
@@ -1525,42 +2089,107 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   }
 
   void _showReactionsBottomSheet() {
+    final emojis = [
+      '❤️', '👍', '👏', '🔥', '🎉', '😂',
+      '😮', '🚀', '🙌', '💡', '💯', '🤝',
+      '⚡', '🥳', '✨', '🤩',
+    ];
+
+    Timer? autoDismissTimer;
+
+    void resetDismissTimer(BuildContext ctx) {
+      autoDismissTimer?.cancel();
+      autoDismissTimer = Timer(const Duration(milliseconds: 3200), () {
+        if (Navigator.canPop(ctx)) {
+          Navigator.pop(ctx);
+        }
+      });
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(24),
-            topRight: Radius.circular(24),
-          ),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF070B19).withOpacity(0.8),
-                border: Border(top: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3))),
+      barrierColor: Colors.black26,
+      isScrollControlled: true,
+      builder: (bottomSheetContext) {
+        resetDismissTimer(bottomSheetContext);
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF070B19).withOpacity(0.92),
+                    border: Border(top: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.35))),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white30,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Row(
+                            children: [
+                              Text('Live Reactions', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                              SizedBox(width: 8),
+                              Text('• Tap rapidly for mass burst!', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11)),
+                            ],
+                          ),
+                          GestureDetector(
+                            onTap: () {
+                              autoDismissTimer?.cancel();
+                              Navigator.pop(bottomSheetContext);
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.white12,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close, color: Colors.white70, size: 16),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 14,
+                        runSpacing: 14,
+                        children: emojis.map((emoji) {
+                          return _ReactionTapButton(
+                            emoji: emoji,
+                            onTap: () {
+                              resetDismissTimer(bottomSheetContext);
+                              _sendReaction(emoji);
+                            },
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 30,
-                runSpacing: 20,
-                children: ['👍', '❤️', '😂', '😮', '👏', '🎉'].map((emoji) {
-                  return GestureDetector(
-                    onTap: () {
-                      Navigator.pop(context);
-                      _sendReaction(emoji);
-                    },
-                    child: Text(emoji, style: const TextStyle(fontSize: 40)),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
+            );
+          },
         );
       },
-    );
+    ).whenComplete(() {
+      autoDismissTimer?.cancel();
+    });
   }
 
   // ──────────────────────────────────────────────
@@ -1905,6 +2534,435 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     }
   }
 
+  void _showParticipantsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (bottomSheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final allParticipants = <Participant>[
+              if (_room.localParticipant != null) _room.localParticipant!,
+              ..._room.remoteParticipants.values,
+            ];
+
+            return ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.78,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF070B19).withOpacity(0.94),
+                    border: Border(
+                      top: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.35)),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        margin: const EdgeInsets.only(top: 12),
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white30,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.people_alt, color: Color(0xFF00E5FF), size: 22),
+                                const SizedBox(width: 10),
+                                Text(
+                                  'Participants (${allParticipants.length})',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.white70),
+                              onPressed: () => Navigator.pop(bottomSheetContext),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(color: Colors.white12, height: 1),
+                      if (_effectiveIsHost)
+                        StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('meetings')
+                              .doc(widget.roomName.split('#').first.trim())
+                              .collection('waiting_room')
+                              .where('status', isEqualTo: 'pending')
+                              .snapshots(),
+                          builder: (ctx, snap) {
+                            final docs = snap.data?.docs ?? [];
+                            if (docs.isEmpty) return const SizedBox.shrink();
+                            return Container(
+                              margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF59E0B).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.4)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.meeting_room_outlined, color: Colors.amber, size: 18),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Waiting Room (${docs.length})',
+                                            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13.5),
+                                          ),
+                                        ],
+                                      ),
+                                      TextButton(
+                                        onPressed: () {
+                                          _decideWaitingGuest('', 'admit_all');
+                                          setSheetState(() {});
+                                        },
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          backgroundColor: const Color(0xFF00FFA3).withOpacity(0.18),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                        child: const Text(
+                                          'Admit All',
+                                          style: TextStyle(color: Color(0xFF00FFA3), fontWeight: FontWeight.bold, fontSize: 12),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ...docs.map((doc) {
+                                    final d = doc.data() as Map<String, dynamic>;
+                                    final guestUid = (d['uid'] ?? doc.id).toString();
+                                    final guestName = (d['name'] ?? 'Guest').toString();
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 4),
+                                      child: Row(
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 15,
+                                            backgroundColor: Colors.amber.withOpacity(0.25),
+                                            child: Text(
+                                              guestName.isNotEmpty ? guestName[0].toUpperCase() : 'G',
+                                              style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              guestName,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w500),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () {
+                                              _decideWaitingGuest(guestUid, 'deny');
+                                              setSheetState(() {});
+                                            },
+                                            style: TextButton.styleFrom(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              minimumSize: Size.zero,
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
+                                            child: const Text('Deny', style: TextStyle(color: Colors.redAccent, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          ElevatedButton(
+                                            onPressed: () {
+                                              _decideWaitingGuest(guestUid, 'admit');
+                                              setSheetState(() {});
+                                            },
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFF00FFA3),
+                                              foregroundColor: const Color(0xFF070B19),
+                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                              minimumSize: Size.zero,
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                            ),
+                                            child: const Text('Admit', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      Flexible(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shrinkWrap: true,
+                          itemCount: allParticipants.length,
+                          separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1, indent: 68),
+                          itemBuilder: (context, index) {
+                            final p = allParticipants[index];
+                            final isLocal = p == _room.localParticipant;
+                            final isHost = p.identity == _room.localParticipant?.identity ? _effectiveIsHost : false;
+                            final isHandRaised = _raisedHands.contains(p.identity);
+                            final isMicOn = p.isMicrophoneEnabled();
+                            final isVideoOn = p.isCameraEnabled();
+
+                            return ListTile(
+                              leading: Stack(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor: const Color(0xFF5C00FF).withOpacity(0.4),
+                                    child: Text(
+                                      (p.name.isNotEmpty ? p.name[0] : (isLocal ? 'Y' : 'P')).toUpperCase(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isHandRaised)
+                                    Positioned(
+                                      bottom: 0,
+                                      right: 0,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(2),
+                                        decoration: const BoxDecoration(
+                                          color: Colors.amber,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.front_hand, size: 10, color: Colors.black),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              title: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      isLocal
+                                          ? '${p.name.isNotEmpty ? p.name : widget.participantName} (You)'
+                                          : (p.name.isNotEmpty ? p.name : 'Participant'),
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (isHost) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF00E5FF).withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.6)),
+                                      ),
+                                      child: const Text('Host', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.bold)),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              subtitle: Row(
+                                children: [
+                                  Icon(
+                                    isMicOn ? Icons.mic : Icons.mic_off,
+                                    size: 13,
+                                    color: isMicOn ? const Color(0xFF00E5FF) : Colors.redAccent,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isMicOn ? 'Active' : 'Muted',
+                                    style: TextStyle(
+                                      color: isMicOn ? Colors.white70 : Colors.redAccent.withOpacity(0.85),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Icon(
+                                    isVideoOn ? Icons.videocam : Icons.videocam_off,
+                                    size: 13,
+                                    color: isVideoOn ? const Color(0xFF00E5FF) : Colors.white38,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isVideoOn ? 'Video on' : 'Video off',
+                                    style: TextStyle(
+                                      color: isVideoOn ? Colors.white70 : Colors.white38,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_effectiveIsHost && !isLocal) ...[
+                                    if (isMicOn)
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          _muteParticipant(p.identity);
+                                          setSheetState(() {});
+                                        },
+                                        icon: const Icon(Icons.mic_off, size: 14, color: Colors.white),
+                                        label: const Text('Mute', style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.red.shade700,
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                      )
+                                    else
+                                      OutlinedButton.icon(
+                                        onPressed: () {
+                                          _requestUnmute(p.identity);
+                                        },
+                                        icon: const Icon(Icons.mic, size: 14, color: Color(0xFF00E5FF)),
+                                        label: const Text('Ask Unmute', style: TextStyle(fontSize: 11, color: Color(0xFF00E5FF), fontWeight: FontWeight.bold)),
+                                        style: OutlinedButton.styleFrom(
+                                          side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.6)),
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                      ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  PopupMenuButton<String>(
+                                    icon: const Icon(Icons.more_vert, color: Colors.white60, size: 20),
+                                    color: const Color(0xFF131B30),
+                                    onSelected: (val) {
+                                      if (val == 'mute' && _effectiveIsHost) {
+                                        _muteParticipant(p.identity);
+                                        setSheetState(() {});
+                                      } else if (val == 'unmute_request' && _effectiveIsHost) {
+                                        _requestUnmute(p.identity);
+                                      } else if (val == 'pin') {
+                                        setState(() {
+                                          _pinnedParticipant = (_pinnedParticipant == p) ? null : p;
+                                        });
+                                      } else if (val == 'lower_hand' && _effectiveIsHost) {
+                                        setState(() {
+                                          _raisedHands.remove(p.identity);
+                                        });
+                                        setSheetState(() {});
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      if (_effectiveIsHost && !isLocal && isMicOn)
+                                        const PopupMenuItem(
+                                          value: 'mute',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.mic_off, color: Colors.redAccent, size: 18),
+                                              SizedBox(width: 8),
+                                              Text('Mute Microphone', style: TextStyle(color: Colors.white)),
+                                            ],
+                                          ),
+                                        ),
+                                      if (_effectiveIsHost && !isLocal && !isMicOn)
+                                        const PopupMenuItem(
+                                          value: 'unmute_request',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.mic, color: Color(0xFF00E5FF), size: 18),
+                                              SizedBox(width: 8),
+                                              Text('Ask to Unmute', style: TextStyle(color: Colors.white)),
+                                            ],
+                                          ),
+                                        ),
+                                      PopupMenuItem(
+                                        value: 'pin',
+                                        child: Row(
+                                          children: [
+                                            Icon(_pinnedParticipant == p ? Icons.push_pin : Icons.push_pin_outlined, color: const Color(0xFF00E5FF), size: 18),
+                                            const SizedBox(width: 8),
+                                            Text(_pinnedParticipant == p ? 'Unpin Video' : 'Pin Video', style: const TextStyle(color: Colors.white)),
+                                          ],
+                                        ),
+                                      ),
+                                      if (_effectiveIsHost && isHandRaised)
+                                        const PopupMenuItem(
+                                          value: 'lower_hand',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.pan_tool_outlined, color: Colors.amber, size: 18),
+                                              SizedBox(width: 8),
+                                              Text('Lower Hand', style: TextStyle(color: Colors.white)),
+                                            ],
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      if (_effectiveIsHost)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                          decoration: const BoxDecoration(
+                            border: Border(top: BorderSide(color: Colors.white10)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.pop(bottomSheetContext);
+                                    _muteAll();
+                                  },
+                                  icon: const Icon(Icons.volume_off, color: Colors.white),
+                                  label: const Text('Mute All Participants', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF5C00FF),
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showMoreOptions() {
     showModalBottomSheet(
       context: context,
@@ -2013,12 +3071,37 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                           _toggleRoomLock();
                         },
                       ),
+                    if (_effectiveIsHost)
+                      _buildOptionTile(
+                        icon: Icons.admin_panel_settings_outlined,
+                        iconColor: _isWaitingRoomEnabled ? const Color(0xFF00FFA3) : const Color(0xFF00E5FF),
+                        title: 'Private Waiting Room',
+                        subtitle: _isWaitingRoomEnabled ? 'Host approval required to join' : 'Guests can enter without approval',
+                        trailing: Switch(
+                          value: _isWaitingRoomEnabled,
+                          activeColor: const Color(0xFF00FFA3),
+                          activeTrackColor: const Color(0xFF00FFA3).withOpacity(0.4),
+                          inactiveThumbColor: Colors.white60,
+                          inactiveTrackColor: Colors.white12,
+                          onChanged: (val) {
+                            Navigator.pop(context);
+                            _toggleWaitingRoom();
+                          },
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _toggleWaitingRoom();
+                        },
+                      ),
                     _buildOptionTile(
                       icon: Icons.people_outline,
                       title: 'Participants',
-                      subtitle: '${_room.remoteParticipants.length + 1} in the room',
+                      subtitle: _effectiveIsHost && _waitingGuests.isNotEmpty
+                          ? '${_room.remoteParticipants.length + 1} in room • ${_waitingGuests.length} waiting'
+                          : '${_room.remoteParticipants.length + 1} in the room',
                       onTap: () {
                         Navigator.pop(context);
+                        _showParticipantsSheet();
                       },
                     ),
                     if (_effectiveIsHost)
@@ -2066,6 +3149,24 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                       onTap: () {
                         Navigator.pop(context);
                         _setDataSaverMode(!_isDataSaverMode);
+                      },
+                    ),
+                    _buildOptionTile(
+                      icon: _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                      title: _isFullScreen ? 'Exit Full Screen' : 'Full Screen Mode',
+                      subtitle: _isFullScreen ? 'Show all on-screen controls' : 'Double-tap video to toggle anytime',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _toggleFullScreen();
+                      },
+                    ),
+                    _buildOptionTile(
+                      icon: Icons.picture_in_picture_alt,
+                      title: 'Picture-in-Picture',
+                      subtitle: 'Minimize call to floating overlay window',
+                      onTap: () {
+                        Navigator.pop(context);
+                        SimplePip().enterPipMode();
                       },
                     ),
                     _buildOptionTile(
@@ -2453,6 +3554,26 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     }
 
     if (primary == null) return const Center(child: CircularProgressIndicator());
+
+    final isLocal = primary == _room.localParticipant;
+    if (isLocal && _isScreenSharing) {
+      return Container(
+        color: const Color(0xFF131728),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.screen_share_rounded, color: Color(0xFF00E5FF), size: 30),
+              SizedBox(height: 4),
+              Text(
+                'Sharing Screen',
+                style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     final videoTrack = primary.videoTrackPublications.firstOrNull?.track;
     if (videoTrack != null && !_isDataSaverMode) {
@@ -3006,6 +4127,101 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
       );
     }
 
+    if (_isWaitingForHostApproval) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF070B19),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28.0),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  padding: const EdgeInsets.all(28),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A).withOpacity(0.92),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(
+                      color: (_isDeniedByHost ? Colors.redAccent : const Color(0xFF00E5FF)).withOpacity(0.35),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: (_isDeniedByHost ? Colors.redAccent : const Color(0xFF00E5FF)).withOpacity(0.14),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _isDeniedByHost ? Icons.block_rounded : Icons.admin_panel_settings_outlined,
+                          color: _isDeniedByHost ? Colors.redAccent : const Color(0xFF00E5FF),
+                          size: 46,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        _displayMeetingTitle,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: (_isDeniedByHost ? Colors.redAccent : Colors.amber).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          _isDeniedByHost ? 'ACCESS DECLINED' : 'WAITING FOR HOST APPROVAL',
+                          style: TextStyle(
+                            color: _isDeniedByHost ? Colors.redAccent : Colors.amber,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        _waitingRoomMessage,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.45),
+                      ),
+                      if (!_isDeniedByHost) ...[
+                        const SizedBox(height: 22),
+                        const SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF00E5FF)),
+                        ),
+                      ],
+                      const SizedBox(height: 26),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () => _exitMeetingScreen(),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: const BorderSide(color: Colors.white24),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: Text(_isDeniedByHost ? 'Return to Dashboard' : 'Leave Waiting Room'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -3028,8 +4244,10 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
         ),
       child: Scaffold(
         backgroundColor: const Color(0xFF070B19),
-        body: Stack(
-        children: [
+        body: ReactionParticleOverlay(
+          key: _reactionOverlayKey,
+          child: Stack(
+            children: [
           // Background Glows
           Positioned(
             top: 200,
@@ -3054,62 +4272,86 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
               children: [
                 // Header
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 16.0),
+                  padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 16.0),
                   child: Row(
                     children: [
-                      // Left: Participant Count Dropdown
-                      PopupMenuButton<String>(
-                        color: const Color(0xFF070B19).withOpacity(0.95),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
-                        ),
-                        offset: const Offset(0, 40),
-                        icon: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.people, color: Color(0xFF00E5FF), size: 16),
-                              const SizedBox(width: 5),
-                              Text(
-                                '${_room.remoteParticipants.length + (_room.localParticipant != null ? 1 : 0)}',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      // Left: Minimize (PiP) + Participant Count Dropdown
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            onTap: () => SimplePip().enterPipMode(),
+                            child: Container(
+                              padding: const EdgeInsets.all(7),
+                              margin: const EdgeInsets.only(right: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white12),
                               ),
-                            ],
-                          ),
-                        ),
-                        itemBuilder: (context) {
-                          final List<Participant> allParticipants = _room.remoteParticipants.values.cast<Participant>().toList();
-                          if (_room.localParticipant != null) {
-                            allParticipants.insert(0, _room.localParticipant!);
-                          }
-                          return allParticipants.map((p) {
-                            final isLocal = p == _room.localParticipant;
-                            return PopupMenuItem<String>(
-                              value: p.identity,
-                              child: Text(
-                                (p.name.isNotEmpty ? p.name : p.identity) + (isLocal ? ' (You)' : ''),
-                                style: const TextStyle(color: Colors.white),
+                              child: const Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: Colors.white,
+                                size: 20,
                               ),
-                            );
-                          }).toList();
-                        },
+                            ),
+                          ),
+                          PopupMenuButton<String>(
+                            color: const Color(0xFF070B19).withOpacity(0.95),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                            ),
+                            offset: const Offset(0, 40),
+                            icon: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.people, color: Color(0xFF00E5FF), size: 15),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${_room.remoteParticipants.length + (_room.localParticipant != null ? 1 : 0)}',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            itemBuilder: (context) {
+                              final List<Participant> allParticipants = _room.remoteParticipants.values.cast<Participant>().toList();
+                              if (_room.localParticipant != null) {
+                                allParticipants.insert(0, _room.localParticipant!);
+                              }
+                              return allParticipants.map((p) {
+                                final isLocal = p == _room.localParticipant;
+                                return PopupMenuItem<String>(
+                                  value: p.identity,
+                                  child: Text(
+                                    (p.name.isNotEmpty ? p.name : p.identity) + (isLocal ? ' (You)' : ''),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                );
+                              }).toList();
+                            },
+                          ),
+                        ],
                       ),
                       const SizedBox(width: 8),
 
-                      // Center: Dynamic Meeting Title & Room Details
+                      // Center: Meeting Title & Clean Subtitle
                       Expanded(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Row(
                               mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 if (_isRecording)
                                   Container(
@@ -3130,53 +4372,68 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                                   ),
                                 Flexible(
                                   child: Text(
-                                    _displayMeetingTitle,
+                                    _displayMeetingTitle.isNotEmpty ? _displayMeetingTitle : widget.roomName,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
                                     style: const TextStyle(
                                       color: Color(0xFF00E5FF),
-                                      fontSize: 16,
+                                      fontSize: 15,
                                       fontWeight: FontWeight.bold,
-                                      letterSpacing: 0.5,
+                                      letterSpacing: 0.3,
                                     ),
                                   ),
                                 ),
                                 if (_isRoomLocked) ...[
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.amber.withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.amber.withOpacity(0.6)),
-                                    ),
-                                    child: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.lock, color: Colors.amber, size: 10),
-                                        SizedBox(width: 3),
-                                        Text('LOCKED', style: TextStyle(color: Colors.amber, fontSize: 9, fontWeight: FontWeight.bold)),
-                                      ],
-                                    ),
-                                  ),
+                                  const SizedBox(width: 5),
+                                  const Icon(Icons.lock, color: Colors.amber, size: 12),
                                 ],
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _isWaitingForScheduledStart ? Icons.hourglass_bottom_rounded : Icons.schedule,
+                                  color: _isWaitingForScheduledStart ? Colors.amber : Colors.white54,
+                                  size: 11,
+                                ),
+                                const SizedBox(width: 3),
+                                Text(
+                                  _meetingDurationText,
+                                  style: TextStyle(
+                                    color: _isWaitingForScheduledStart ? Colors.amber : Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    fontFeatures: const [FontFeature.tabularFigures()],
+                                  ),
+                                ),
                                 if (_isDataSaverMode) ...[
                                   const SizedBox(width: 6),
                                   GestureDetector(
                                     onTap: () => _setDataSaverMode(false),
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFF59E0B).withOpacity(0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.6)),
+                                        color: const Color(0xFFF59E0B).withOpacity(0.18),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5), width: 0.8),
                                       ),
                                       child: const Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Icon(Icons.bolt, color: Color(0xFFF59E0B), size: 10),
-                                          SizedBox(width: 3),
-                                          Text('SAVER', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 9, fontWeight: FontWeight.bold)),
+                                          SizedBox(width: 2),
+                                          Text(
+                                            'SAVER',
+                                            style: TextStyle(
+                                              color: Color(0xFFF59E0B),
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -3184,42 +4441,12 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                                 ],
                               ],
                             ),
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    widget.roomName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 12,
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(width: 3, height: 3, decoration: const BoxDecoration(color: Colors.white30, shape: BoxShape.circle)),
-                                const SizedBox(width: 8),
-                                const Icon(Icons.schedule, color: Color(0xFF00E5FF), size: 12),
-                                const SizedBox(width: 3),
-                                Text(
-                                  _meetingDurationText,
-                                  style: const TextStyle(
-                                    color: Color(0xFF00E5FF),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    fontFeatures: [FontFeature.tabularFigures()],
-                                  ),
-                                ),
-                              ],
-                            ),
                           ],
                         ),
                       ),
                       const SizedBox(width: 8),
 
-                      // Right: Quick Actions
+                      // Right: Quick Actions (Audio Route + Flip Camera)
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -3241,36 +4468,6 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                             ),
                           ),
                           GestureDetector(
-                            onTap: () => _toggleFullScreen(),
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              margin: const EdgeInsets.only(right: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white10),
-                              ),
-                              child: Icon(
-                                _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                                color: const Color(0xFF00E5FF),
-                                size: 19,
-                              ),
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: () => SimplePip().enterPipMode(),
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              margin: const EdgeInsets.only(right: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white10),
-                              ),
-                              child: const Icon(Icons.picture_in_picture_alt, color: Color(0xFF00E5FF), size: 19),
-                            ),
-                          ),
-                          GestureDetector(
                             onTap: _flipCamera,
                             child: Container(
                               padding: const EdgeInsets.all(8),
@@ -3279,7 +4476,11 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                                 shape: BoxShape.circle,
                                 border: Border.all(color: Colors.white10),
                               ),
-                              child: const Icon(Icons.flip_camera_ios, color: Color(0xFF00E5FF), size: 19),
+                              child: Icon(
+                                Icons.flip_camera_ios,
+                                color: _isVideoOff ? Colors.white38 : const Color(0xFF00E5FF),
+                                size: 19,
+                              ),
                             ),
                           ),
                         ],
@@ -3287,7 +4488,81 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                     ],
                   ),
                 ),
-                
+
+                // Host Live Waiting Room Knock Alert Banner
+                if (_effectiveIsHost && _waitingGuests.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A).withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.amber.withOpacity(0.6), width: 1.2),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 12),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.18),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.meeting_room_outlined, color: Colors.amber, size: 18),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: _showParticipantsSheet,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${_waitingGuests.first['name']} wants to join',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    _waitingGuests.length > 1
+                                        ? '+${_waitingGuests.length - 1} more waiting • Tap to review all'
+                                        : 'Waiting Room • Approve entry',
+                                    style: const TextStyle(color: Colors.amber, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => _decideWaitingGuest(_waitingGuests.first['uid'].toString(), 'deny'),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text('Deny', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                          ),
+                          const SizedBox(width: 4),
+                          ElevatedButton(
+                            onPressed: () => _decideWaitingGuest(_waitingGuests.first['uid'].toString(), 'admit'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00FFA3),
+                              foregroundColor: const Color(0xFF070B19),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: const Text('Admit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
                 // Video Grid
                 Expanded(
                   child: Padding(
@@ -3451,6 +4726,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                             ),
                             // End Call Button (Solid Red with Call End Icon)
                             GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: _endCall,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -3485,6 +4761,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
           // Q&A Popup Overlay
           _buildQaPopup(),
         ],
+      ),
       ),
       ),
     ));
@@ -3628,42 +4905,44 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Background (Video or Avatar)
+              // Background (Video, Presenter Card, or Avatar)
               Container(
                 color: const Color(0xFF131728),
-                child: showAvatar
-                    ? Center(
-                        child: Container(
-                          width: avatarSize,
-                          height: avatarSize,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF00E5FF).withOpacity(0.3),
-                                blurRadius: 12,
-                                spreadRadius: 1,
+                child: (isLocal && _isScreenSharing)
+                    ? _buildLocalScreenSharePresenterTile(isThumbnail: isThumbnail)
+                    : (showAvatar
+                        ? Center(
+                            child: Container(
+                              width: avatarSize,
+                              height: avatarSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: const LinearGradient(
+                                  colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFF00E5FF).withOpacity(0.3),
+                                    blurRadius: 12,
+                                    spreadRadius: 1,
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              initial,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: fontSize,
-                                fontWeight: FontWeight.bold,
+                              child: Center(
+                                child: Text(
+                                  initial,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: fontSize,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                      )
-                    : VideoTrackRenderer(track as VideoTrack),
+                          )
+                        : VideoTrackRenderer(track as VideoTrack)),
               ),
 
               // Bottom Name & Status Pill
@@ -3731,6 +5010,34 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_effectiveIsHost && p is RemoteParticipant)
+                      GestureDetector(
+                        onTap: () {
+                          if (p.isMicrophoneEnabled()) {
+                            _muteParticipant(p.identity);
+                          } else {
+                            _requestUnmute(p.identity);
+                          }
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: p.isMicrophoneEnabled()
+                                ? const Color(0xFFFF3B30).withOpacity(0.85)
+                                : Colors.black.withOpacity(0.55),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: p.isMicrophoneEnabled() ? Colors.redAccent : Colors.white24,
+                            ),
+                          ),
+                          child: Icon(
+                            p.isMicrophoneEnabled() ? Icons.mic : Icons.mic_off,
+                            color: Colors.white,
+                            size: 13,
+                          ),
+                        ),
+                      ),
                     if (_raisedHands.contains(p.identity))
                       Container(
                         margin: const EdgeInsets.only(right: 4),
@@ -4152,6 +5459,9 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     final track = trackPub?.track;
     final isMuted = trackPub?.muted ?? true;
     final isLocal = p == _room.localParticipant;
+    if (isLocal && _isScreenSharing) {
+      return _buildLocalScreenSharePresenterTile(isThumbnail: false);
+    }
     final forceAvatar = isLocal && _isVideoOff;
     final showAvatar = forceAvatar || isMuted || track == null || (_isDataSaverMode && !isLocal);
     final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
@@ -4176,5 +5486,226 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     }
     return VideoTrackRenderer(track as VideoTrack);
   }
+
+  Widget _buildLocalScreenSharePresenterTile({bool isThumbnail = false}) {
+    if (isThumbnail) {
+      return Container(
+        color: const Color(0xFF131728),
+        padding: const EdgeInsets.all(8),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E5FF).withOpacity(0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF00E5FF).withOpacity(0.5),
+                    width: 1.5,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.screen_share_rounded,
+                  color: Color(0xFF00E5FF),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Presenting',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      color: const Color(0xFF0D111A),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFF00E5FF).withOpacity(0.2),
+                      const Color(0xFF5C00FF).withOpacity(0.2),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  border: Border.all(
+                    color: const Color(0xFF00E5FF).withOpacity(0.6),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF00E5FF).withOpacity(0.25),
+                      blurRadius: 20,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.screen_share_rounded,
+                  color: Color(0xFF00E5FF),
+                  size: 38,
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "You're presenting to everyone",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Your screen is visible to all participants. Switch to any app to share content.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.7),
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _toggleScreenShare,
+                    icon: const Icon(Icons.stop_screen_share_rounded, size: 18, color: Colors.white),
+                    label: const Text(
+                      'Stop Sharing',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF3B30),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 3,
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      try {
+                        SimplePip().enterPipMode();
+                      } catch (_) {}
+                    },
+                    icon: const Icon(Icons.picture_in_picture_alt_rounded, size: 18, color: Color(0xFF00E5FF)),
+                    label: const Text(
+                      'Minimize App',
+                      style: TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF00E5FF)),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
+
+class _ReactionTapButton extends StatefulWidget {
+  final String emoji;
+  final VoidCallback onTap;
+
+  const _ReactionTapButton({
+    required this.emoji,
+    required this.onTap,
+  });
+
+  @override
+  State<_ReactionTapButton> createState() => _ReactionTapButtonState();
+}
+
+class _ReactionTapButtonState extends State<_ReactionTapButton> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 90),
+      reverseDuration: const Duration(milliseconds: 140),
+    );
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.35).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handleTap() {
+    _controller.forward().then((_) {
+      if (mounted) _controller.reverse();
+    });
+    widget.onTap();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _handleTap,
+      behavior: HitTestBehavior.opaque,
+      child: ScaleTransition(
+        scale: _scaleAnimation,
+        child: Container(
+          width: 52,
+          height: 52,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.12)),
+          ),
+          child: Text(
+            widget.emoji,
+            style: const TextStyle(fontSize: 28),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 

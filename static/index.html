@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>La-Vie Conference App - WebRTC</title>
-    <link rel="stylesheet" href="/static/style.css?v=9">
+    <link rel="stylesheet" href="/static/style.css?v=13">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -13,13 +13,38 @@
 <body>
     <div class="container">
         <!-- TOP NAVIGATION -->
-        <header class="top-nav">
-            <div class="logo">
-                <img src="/static/logoI.png" alt="Logo" class="logo-icon" style="height: 32px; width: auto; border-radius: 8px;">
-                <span class="logo-text">La-Vie Conference</span>
+        <header class="top-nav" id="topNav">
+            <div class="nav-brand-group" style="display: flex; align-items: center;">
+                <div class="logo">
+                    <img src="/static/logoI.png" alt="Logo" class="logo-icon" style="height: 32px; width: auto; border-radius: 8px;">
+                    <span class="logo-text">La-Vie <span class="logo-text-muted">Conference</span></span>
+                </div>
+                
+                <!-- In-Call Header Meeting Info (Integrated & Clutter-Free) -->
+                <div class="header-meeting-info" id="headerMeetingInfo" style="display: none;">
+                    <div class="header-room-pill" title="Meeting Room Code">
+                        <span class="material-symbols-outlined pill-icon">videocam</span>
+                        <span class="meeting-code-text" id="headerRoomId">la-vie-...</span>
+                        <button class="copy-code-badge-btn" id="headerCopyBtn" title="Copy Meeting Link">
+                            <span class="material-symbols-outlined">content_copy</span>
+                        </button>
+                    </div>
+                    <div class="header-timer-pill" id="headerMeetingTimer" title="Meeting duration">
+                        <span class="material-symbols-outlined timer-icon">schedule</span>
+                        <span id="meetingTimerText">00:00</span>
+                    </div>
+                    <div class="header-network-pill" title="Connection: Excellent">
+                        <span class="network-dot"></span>
+                        <span class="network-label">Live</span>
+                    </div>
+                </div>
             </div>
             
             <div class="nav-controls">
+                <button id="inCallInviteBtn" class="nav-btn in-call-invite-btn" style="display: none;" title="Share meeting invite link">
+                    <span class="material-symbols-outlined" style="font-size: 18px; color: #00e5ff;">person_add</span>
+                    <span>Invite</span>
+                </button>
                 <button id="themeToggleBtn" class="theme-toggle" title="Toggle Light/Dark Mode">
                     <span class="material-symbols-outlined" id="themeIcon">light_mode</span>
                 </button>
@@ -311,8 +336,19 @@
             <div class="modal-content">
                 <button class="close-modal">&times;</button>
                 <h2 id="modalTitle">Log In</h2>
+                <input type="text" id="authFullName" class="modal-input" placeholder="Full Name" style="display: none;">
                 <input type="email" id="authEmail" class="modal-input" placeholder="Email">
                 <input type="password" id="authPassword" class="modal-input" placeholder="Password">
+                <div id="signupOtpSection" style="display: none; margin: 6px 0 12px 0;">
+                    <p style="font-size: 0.85rem; color: #C9D1D9; margin-bottom: 10px; line-height: 1.4;">
+                        Enter the 6-digit verification code sent to <strong id="signupOtpTargetEmail" style="color: #00E5FF;"></strong>
+                    </p>
+                    <input type="text" id="signupOtpInput" class="modal-input" placeholder="6-Digit Verification Code" maxlength="6" inputmode="numeric" style="text-align: center; letter-spacing: 6px; font-size: 1.15rem; font-weight: 700;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                        <a href="#" id="changeSignupEmailLink" style="font-size: 0.82rem; color: var(--text-muted); text-decoration: none;">Change email</a>
+                        <button type="button" id="resendSignupOtpBtn" style="background: none; border: none; color: #00E5FF; font-size: 0.82rem; cursor: pointer; padding: 0;">Resend code</button>
+                    </div>
+                </div>
                 <div id="forgotPasswordContainer" style="text-align: right; margin: -5px 0 14px 0;">
                     <a href="#" id="forgotPasswordLink" style="font-size: 0.82rem; color: #00E5FF; text-decoration: none;">Forgot password?</a>
                 </div>
@@ -442,6 +478,10 @@
                 <input type="text" id="scheduleTitle" class="modal-input" placeholder="Meeting Title (e.g. Weekly Sync)">
                 <input type="datetime-local" id="scheduleTime" class="modal-input">
                 <input type="text" id="scheduleAttendees" class="modal-input" placeholder="Attendee Emails (comma separated, optional)">
+                <label style="display:flex;align-items:center;gap:10px;color:#e2e8f0;font-size:0.9rem;margin:4px 0 16px 0;cursor:pointer;">
+                    <input type="checkbox" id="scheduleRequireApproval" style="width:18px;height:18px;accent-color:#00E5FF;">
+                    <span>Private Waiting Room (Host approval required)</span>
+                </label>
                 <button id="scheduleSubmitBtn" class="primary-btn full-width">Save to Dashboard</button>
                 <p id="scheduleMsg" class="success-text"></p>
             </div>
@@ -791,32 +831,33 @@
                 </div>
                 
                 <nav class="sidebar-nav">
-                    <button class="sidebar-nav-btn active" id="navPeopleBtn" title="People">
+                    <button class="sidebar-nav-btn active" id="navPeopleBtn" title="Participants" data-tooltip="Participants">
                         <span class="material-symbols-outlined">group</span>
                         <span class="sidebar-nav-text">People</span>
+                        <span class="sidebar-badge" id="navPeopleBadge">1</span>
                     </button>
-                    <button class="sidebar-nav-btn" id="navChatBtn" title="Chat">
+                    <button class="sidebar-nav-btn" id="navChatBtn" title="Chat" data-tooltip="Chat">
                         <span class="material-symbols-outlined">chat</span>
                         <span class="sidebar-nav-text">Chat</span>
                         <span class="sidebar-badge" id="navChatBadge" style="display:none;"></span>
                     </button>
-                    <button class="sidebar-nav-btn" id="navWhiteboardBtn" title="Whiteboard">
+                    <button class="sidebar-nav-btn" id="navWhiteboardBtn" title="Whiteboard" data-tooltip="Whiteboard">
                         <span class="material-symbols-outlined">draw</span>
                         <span class="sidebar-nav-text">Whiteboard</span>
                     </button>
-                    <button class="sidebar-nav-btn" id="navPollsBtn" title="Polls">
+                    <button class="sidebar-nav-btn" id="navPollsBtn" title="Polls" data-tooltip="Polls">
                         <span class="material-symbols-outlined">bar_chart</span>
                         <span class="sidebar-nav-text">Polls</span>
                     </button>
-                    <button class="sidebar-nav-btn" id="navQaBtn" title="Q&A">
+                    <button class="sidebar-nav-btn" id="navQaBtn" title="Q&A" data-tooltip="Q&amp;A">
                         <span class="material-symbols-outlined">help_center</span>
                         <span class="sidebar-nav-text">Q&amp;A</span>
                     </button>
-                    <button class="sidebar-nav-btn" id="navSettingsBtn" title="Settings" style="margin-top: auto;">
+                    <button class="sidebar-nav-btn" id="navSettingsBtn" title="Settings" data-tooltip="Settings" style="margin-top: auto;">
                         <span class="material-symbols-outlined">settings</span>
                         <span class="sidebar-nav-text">Settings</span>
                     </button>
-                    <button class="sidebar-nav-btn" id="collapseSidebarBtn" title="Collapse">
+                    <button class="sidebar-nav-btn" id="collapseSidebarBtn" title="Toggle Sidebar" data-tooltip="Toggle Sidebar">
                         <span class="material-symbols-outlined" id="collapseIcon">keyboard_double_arrow_left</span>
                         <span class="sidebar-nav-text">Collapse</span>
                     </button>
@@ -829,8 +870,8 @@
                     <span class="material-symbols-outlined">menu</span>
                 </button>
 
-                <div class="meeting-info-top" id="meetingInfo">
-                    <!-- Code injected here -->
+                <div class="meeting-info-top" id="meetingInfo" style="display: none;">
+                    <!-- Code moved to in-call top navigation header -->
                 </div>
                 <div class="whiteboard-container" id="whiteboardContainer">
                     <button class="mobile-whiteboard-close" id="mobileWhiteboardCloseBtn">
@@ -841,7 +882,20 @@
                 <div class="video-grid" id="videoGrid">
                     <div class="video-wrapper local" id="wrapper-local-camera">
                         <video id="localVideo" autoplay muted playsinline></video>
-                        <div class="avatar-placeholder" id="localAvatar">You</div>
+                        <div class="avatar-placeholder" id="localAvatar">
+                            <div class="avatar-circle">
+                                <span id="localAvatarLetter">EO</span>
+                                <div class="avatar-pulse-ring"></div>
+                                <div class="avatar-pulse-ring-outer"></div>
+                            </div>
+                            <div class="avatar-info-group">
+                                <span class="avatar-name" id="localAvatarName">You</span>
+                                <div class="avatar-status-pill" id="localMicStatusPill">
+                                    <span class="material-symbols-outlined" id="localMicStatusIcon">mic</span>
+                                    <span id="localMicStatusText">Mic active</span>
+                                </div>
+                            </div>
+                        </div>
                         <span class="label" id="localLabel">You</span>
                         <div class="signal-bars" data-quality="excellent" title="Connection: Excellent"><span></span><span></span><span></span></div>
                         <button class="fullscreen-overlay-btn" id="localFullscreenBtn" title="Full Screen">
@@ -855,22 +909,63 @@
                         </button>
                     </div>
                 </div>
+
+                <!-- Solo invite card when user is alone (Google Meet style) -->
+                <div class="solo-invite-card" id="soloInviteCard" style="display: none;">
+                    <button class="solo-close-btn" id="closeSoloInviteBtn" title="Dismiss" type="button">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                    <div class="solo-card-header">
+                        <div class="solo-card-icon">
+                            <span class="material-symbols-outlined">group_add</span>
+                        </div>
+                        <div class="solo-card-titles">
+                            <h3>Your meeting is ready</h3>
+                            <p>Share this link with others you want in the meeting.</p>
+                        </div>
+                    </div>
+                    <div class="solo-invite-actions">
+                        <div class="solo-code-chip">
+                            <span class="material-symbols-outlined chip-icon">link</span>
+                            <span id="soloRoomCodeDisplay">la-vie-...</span>
+                        </div>
+                        <div class="solo-btn-row">
+                            <button class="primary-btn solo-copy-btn" id="soloCopyLinkBtn" type="button">
+                                <span class="material-symbols-outlined">content_copy</span>
+                                <span id="soloCopyBtnText">Copy meeting link</span>
+                            </button>
+                            <button class="solo-share-whatsapp-btn" id="soloWhatsappBtn" type="button" title="Share via WhatsApp">
+                                <span class="material-symbols-outlined">share</span>
+                                <span>WhatsApp</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 
                 <!-- Live Captions Subtitle Overlay -->
                 <div class="live-captions-container" id="liveCaptionsContainer" style="display: none;"></div>
                 
                 <!-- MORE DRAWER (Categorised slide-up panel, Tier 2 controls) -->
                 <div class="more-drawer" id="moreDrawer" role="dialog" aria-label="More options">
+                    <div class="drawer-header">
+                        <div class="drawer-header-title">
+                            <span class="material-symbols-outlined">tune</span>
+                            <span>More Options</span>
+                        </div>
+                        <button class="drawer-close-btn" id="closeDrawerBtn" title="Close" type="button">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+                    </div>
 
                     <!-- GROUP: Interact -->
                     <div class="drawer-group">
                         <p class="drawer-group-title">Interact</p>
                         <div class="react-wrapper" style="position: relative; width: 100%;">
-                            <button id="toggleReactBtn" class="drawer-item" title="React">
+                            <button id="drawerReactBtn" class="drawer-item" title="React">
                                 <span class="material-symbols-outlined">add_reaction</span>
                                 React
                             </button>
-                            <div class="emoji-popover" id="emojiPopover" style="display: none; position: absolute; bottom: calc(100% + 8px); left: 14px; z-index: 99999;">
+                            <div class="emoji-popover" id="drawerEmojiPopover" style="display: none; position: absolute; bottom: calc(100% + 8px); left: 14px; z-index: 99999;">
                                 <button class="emoji-btn">👍</button>
                                 <button class="emoji-btn">❤️</button>
                                 <button class="emoji-btn">😂</button>
@@ -879,7 +974,7 @@
                                 <button class="emoji-btn">🎉</button>
                             </div>
                         </div>
-                        <button id="toggleHandBtn" class="drawer-item" title="Raise Hand">
+                        <button id="drawerHandBtn" class="drawer-item" title="Raise Hand">
                             <span class="material-symbols-outlined">front_hand</span>
                             Raise Hand
                         </button>
@@ -992,49 +1087,100 @@
                     </div>
                 </div>
 
-                <!-- TIER-1 CONTROL BAR (5 buttons only: Mic, Video, Screen, More, Leave) -->
+                <!-- BOTTOM CONTROL DOCK (Grouped strictly by Hick's Law: Media, Engagement, Collab Drawers, Safe Exit) -->
                 <div class="media-controls media-controls-v2" id="mediaControls" style="display: none;">
-                    <button id="toggleMicBtn" class="control-btn active" title="Mute/Unmute">
-                        <span class="material-symbols-outlined">mic</span>
-                    </button>
-                    <button id="toggleVideoBtn" class="control-btn active" title="Start/Stop Video">
-                        <span class="material-symbols-outlined">videocam</span>
-                    </button>
-                    <button id="toggleScreenBtn" class="control-btn" title="Share Screen">
-                        <span class="material-symbols-outlined">present_to_all</span>
-                    </button>
-
-                    <!-- Live Captions Quick-Toggle Button -->
-                    <button id="toggleCaptionsBtn" class="control-btn" title="Live Captions (CC)">
-                        <span class="material-symbols-outlined">closed_caption</span>
-                    </button>
-
-                    <!-- Audio Output Quick-Switch Button -->
-                    <div class="more-options-wrapper" style="position: relative;">
-                        <button id="audioOutputBtn" class="control-btn" title="Switch Audio Output" style="display: none;">
-                            <span class="material-symbols-outlined" id="audioOutputBtnIcon">volume_up</span>
+                    <!-- GROUP 1: Primary AV Media -->
+                    <div class="control-group av-group">
+                        <button id="toggleMicBtn" class="control-btn active" title="Mute/Unmute (Alt+M)" aria-label="Mute/Unmute">
+                            <span class="material-symbols-outlined">mic</span>
+                            <span class="btn-subtext">Mute</span>
                         </button>
-                        <!-- Floating audio output picker -->
-                        <div id="audioOutputPicker" class="audio-output-picker" style="display: none;">
-                            <div class="aop-header">
-                                <span class="material-symbols-outlined" style="font-size:1rem;color:#00E5FF;">settings_input_component</span>
-                                <span>Audio Output</span>
-                                <span id="aopDeviceCount" style="margin-left:auto;font-size:0.72rem;opacity:0.45;"></span>
+                        <button id="toggleVideoBtn" class="control-btn active" title="Start/Stop Video (Alt+V)" aria-label="Start/Stop Video">
+                            <span class="material-symbols-outlined">videocam</span>
+                            <span class="btn-subtext">Camera</span>
+                        </button>
+                        <button id="toggleScreenBtn" class="control-btn" title="Share Screen" aria-label="Share Screen">
+                            <span class="material-symbols-outlined">present_to_all</span>
+                            <span class="btn-subtext">Share</span>
+                        </button>
+                    </div>
+
+                    <div class="controls-divider"></div>
+
+                    <!-- GROUP 2: In-Call Engagement -->
+                    <div class="control-group engage-group">
+                        <div class="react-wrapper" style="position: relative;">
+                            <button id="toggleReactBtn" class="control-btn" title="Reactions" aria-label="Reactions">
+                                <span class="material-symbols-outlined">add_reaction</span>
+                                <span class="btn-subtext">React</span>
+                            </button>
+                            <div class="emoji-popover" id="emojiPopover" style="display: none; position: absolute; bottom: calc(100% + 14px); left: 50%; transform: translateX(-50%); z-index: 99999;">
+                                <button class="emoji-btn" title="Thumbs up">👍</button>
+                                <button class="emoji-btn" title="Love">❤️</button>
+                                <button class="emoji-btn" title="Laugh">😂</button>
+                                <button class="emoji-btn" title="Surprised">😮</button>
+                                <button class="emoji-btn" title="Clap">👏</button>
+                                <button class="emoji-btn" title="Celebrate">🎉</button>
                             </div>
-                            <div id="aopRouteList" class="aop-route-list"></div>
+                        </div>
+                        <button id="toggleHandBtn" class="control-btn" title="Raise Hand" aria-label="Raise Hand">
+                            <span class="material-symbols-outlined">front_hand</span>
+                            <span class="btn-subtext">Hand</span>
+                        </button>
+                        <button id="toggleCaptionsBtn" class="control-btn" title="Live Captions (CC)" aria-label="Live Captions">
+                            <span class="material-symbols-outlined">closed_caption</span>
+                            <span class="btn-subtext">Captions</span>
+                        </button>
+
+                        <!-- Audio Output Quick-Switch Button -->
+                        <div class="more-options-wrapper" style="position: relative;">
+                            <button id="audioOutputBtn" class="control-btn" title="Switch Audio Output" style="display: none;">
+                                <span class="material-symbols-outlined" id="audioOutputBtnIcon">volume_up</span>
+                                <span class="btn-subtext">Speaker</span>
+                            </button>
+                            <!-- Floating audio output picker -->
+                            <div id="audioOutputPicker" class="audio-output-picker" style="display: none;">
+                                <div class="aop-header">
+                                    <span class="material-symbols-outlined" style="font-size:1rem;color:#00E5FF;">settings_input_component</span>
+                                    <span>Audio Output</span>
+                                    <span id="aopDeviceCount" style="margin-left:auto;font-size:0.72rem;opacity:0.45;"></span>
+                                </div>
+                                <div id="aopRouteList" class="aop-route-list"></div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="more-options-wrapper" style="position: relative;">
-                        <button id="toggleMoreBtn" class="control-btn" title="More options">
-                            <span class="material-symbols-outlined">more_horiz</span>
+                    <div class="controls-divider"></div>
+
+                    <!-- GROUP 3: Collaboration Drawers -->
+                    <div class="control-group collab-group">
+                        <button id="toggleChatBtn" class="control-btn badge-container" title="Open Chat" aria-label="Chat">
+                            <span class="material-symbols-outlined">chat</span>
+                            <span class="btn-subtext">Chat</span>
+                            <span class="dock-badge" id="dockChatBadge" style="display: none;">0</span>
                         </button>
+                        <button id="togglePeopleBtn" class="control-btn badge-container" title="Participants" aria-label="Participants">
+                            <span class="material-symbols-outlined">group</span>
+                            <span class="btn-subtext" id="peopleBtnSubtext">People</span>
+                            <span class="dock-badge" id="dockPeopleBadge">1</span>
+                        </button>
+                        <div class="more-options-wrapper" style="position: relative;">
+                            <button id="toggleMoreBtn" class="control-btn" title="More options &amp; tools" aria-label="More options">
+                                <span class="material-symbols-outlined">more_horiz</span>
+                                <span class="btn-subtext">More</span>
+                            </button>
+                        </div>
                     </div>
 
+                    <div class="controls-divider"></div>
 
-                    <button id="leaveCallBtn" class="control-btn leave-btn" title="Leave Call">
-                        <span class="material-symbols-outlined">call_end</span>
-                    </button>
+                    <!-- GROUP 4: Danger Action (Safe Panic Exit) -->
+                    <div class="control-group danger-group">
+                        <button id="leaveCallBtn" class="control-btn leave-btn" title="Leave Call" aria-label="Leave Call">
+                            <span class="material-symbols-outlined">call_end</span>
+                            <span class="btn-subtext">Leave</span>
+                        </button>
+                    </div>
                 </div>
             </div>
             
@@ -1060,6 +1206,13 @@
                         <h3>People</h3>
                         <button class="close-chat-btn" id="closePeopleBtn"><span class="material-symbols-outlined">close</span></button>
                     </div>
+                    <div id="webHostWaitingControls" style="display:none;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.08);">
+                        <label style="display:flex;align-items:center;justify-content:space-between;color:#e2e8f0;font-size:12.5px;cursor:pointer;">
+                            <span>🔒 Private Waiting Room</span>
+                            <input type="checkbox" id="webWaitingRoomToggle" style="width:16px;height:16px;accent-color:#00FFA3;">
+                        </label>
+                    </div>
+                    <div id="webWaitingRoomSection" style="display:none;padding:10px 14px;background:rgba(245,158,11,0.1);border-bottom:1px solid rgba(245,158,11,0.3);"></div>
                     <div class="chat-messages" id="peopleList" style="gap: 8px;">
                         <!-- Participants list goes here -->
                     </div>
@@ -1272,6 +1425,6 @@
     <script type="module" src="/static/firebase-config.js"></script>
     <script type="module" src="/static/auth.js?v=5"></script>
     <script type="module" src="/static/dashboard.js?v=6"></script>
-    <script type="module" src="/static/app.js?v=10"></script>
+    <script type="module" src="/static/app.js?v=11"></script>
 </body>
 </html>

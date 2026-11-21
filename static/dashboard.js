@@ -261,12 +261,17 @@ scheduleSubmitBtn.addEventListener("click", async () => {
         const scheduledDateObj = new Date(time);
         const scheduledTimeIso = scheduledDateObj.toISOString();
 
+        const requireApprovalEl = document.getElementById("scheduleRequireApproval");
+        const requireApproval = requireApprovalEl ? Boolean(requireApprovalEl.checked) : false;
+
         await fbFunctions.addDoc(fbFunctions.collection(db, "meetings"), {
             hostId: currentUser.uid,
+            hostName: currentUser.displayName || currentUser.email || "La-Vie Host",
             title: title,
             scheduledTime: scheduledTimeIso,
             roomId: roomId,
             attendeeEmails: attendeeEmails,
+            requireApproval: requireApproval,
             notified: false,
             createdAt: new Date().toISOString()
         });
@@ -283,6 +288,7 @@ scheduleSubmitBtn.addEventListener("click", async () => {
             scheduleTitle.value = "";
             scheduleTime.value = "";
             if (scheduleAttendees) scheduleAttendees.value = "";
+            if (requireApprovalEl) requireApprovalEl.checked = false;
             scheduleMsg.textContent = "";
             fetchMeetings();
         }, 2000);

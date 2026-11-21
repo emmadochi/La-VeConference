@@ -29,18 +29,22 @@ void main() async {
   await notificationService.init();
   await notificationService.requestPermissions();
   
-  // Initialize Firebase with fallback options for Desktop platforms
+  // Initialize Firebase with platform-specific options (iOS reads GoogleService-Info.plist)
   try {
     if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(
-        options: const FirebaseOptions(
-          apiKey: 'AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo',
-          appId: '1:563333021985:android:a299708fe90284e7a13e60',
-          messagingSenderId: '563333021985',
-          projectId: 'lifeconference-e0add',
-          storageBucket: 'lifeconference-e0add.firebasestorage.app',
-        ),
-      );
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await Firebase.initializeApp();
+      } else {
+        await Firebase.initializeApp(
+          options: const FirebaseOptions(
+            apiKey: 'AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo',
+            appId: '1:563333021985:android:a299708fe90284e7a13e60',
+            messagingSenderId: '563333021985',
+            projectId: 'lifeconference-e0add',
+            storageBucket: 'lifeconference-e0add.firebasestorage.app',
+          ),
+        );
+      }
     }
     if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -60,12 +64,15 @@ void main() async {
   runApp(const LaVieApp());
 }
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class LaVieApp extends StatelessWidget {
   const LaVieApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'La-Vie Premium',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
