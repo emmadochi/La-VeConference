@@ -8,8 +8,6 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
-      groups:
-        - appstore_credentials
       vars:
         APP_STORE_APPLE_ID: 6837527943
         BUNDLE_ID: "org.lifechangerstouch.lavie"
@@ -25,8 +23,7 @@ workflows:
           cd ios && pod install && cd ..
       - name: Flutter build ipa
         script: |
-          flutter build ipa --release \
-            --export-options-plist=/Users/builder/export_options.plist
+          flutter build ipa --release
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
@@ -38,10 +35,6 @@ workflows:
         notify:
           success: true
           failure: true
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
-        submit_to_app_store: false
 
   lichat-messenger-ios:
     name: LiChat Messenger iOS Release
@@ -52,8 +45,6 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
-      groups:
-        - appstore_credentials
       vars:
         BUNDLE_ID: "org.lifechangerstouch.lavie.messenger"
     scripts:
@@ -68,8 +59,7 @@ workflows:
           cd ios && pod install && cd ..
       - name: Flutter build ipa
         script: |
-          flutter build ipa --release \
-            --export-options-plist=/Users/builder/export_options.plist
+          flutter build ipa --release
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
@@ -81,7 +71,3 @@ workflows:
         notify:
           success: true
           failure: true
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
-        submit_to_app_store: false
