@@ -24,6 +24,10 @@ la_vie_flutter/build/
 la_vie_flutter/.dart_tool/
 la_vie_flutter/.flutter-plugins
 la_vie_flutter/.flutter-plugins-dependencies
+la_vie_messenger/build/
+la_vie_messenger/.dart_tool/
+la_vie_messenger/.flutter-plugins
+la_vie_messenger/.flutter-plugins-dependencies
 
 # Generated Reports & PDFs
 *.docx
@@ -36,6 +40,3 @@ implementation_planlaa
 scratch_*.png
 lichat_*.png
 logoI_*.png
-
-# Sub-projects (tracked in separate repository)
-la_vie_messenger/

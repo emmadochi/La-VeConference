@@ -1,0 +1,84 @@
+{
+  "project_info": {
+    "project_number": "563333021985",
+    "project_id": "lifeconference-e0add",
+    "storage_bucket": "lifeconference-e0add.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:563333021985:android:a299708fe90284e7a13e60",
+        "android_client_info": {
+          "package_name": "org.lifechangerstouch.lavie"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "563333021985-64nvrh1mvbac09r9eipphve6b2e050dd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "org.lifechangerstouch.lavie",
+            "certificate_hash": "61162ed6fb0171f2cdd75e0c6553e4df50e9c24d"
+          }
+        },
+        {
+          "client_id": "563333021985-nbrjkql6t8evhd7i47lf8s7ie4khjdi6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "563333021985-nbrjkql6t8evhd7i47lf8s7ie4khjdi6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:563333021985:android:e9bf77cbe1695e6da13e60",
+        "android_client_info": {
+          "package_name": "org.lifechangerstouch.lavie.messenger"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "563333021985-n6i2lm407goml718v3flqbq0siv4ld61.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "org.lifechangerstouch.lavie.messenger",
+            "certificate_hash": "61162ed6fb0171f2cdd75e0c6553e4df50e9c24d"
+          }
+        },
+        {
+          "client_id": "563333021985-nbrjkql6t8evhd7i47lf8s7ie4khjdi6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "563333021985-nbrjkql6t8evhd7i47lf8s7ie4khjdi6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
