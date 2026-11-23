@@ -9,9 +9,34 @@ import 'main_layout.dart';
 import 'services/notification_service.dart';
 import 'package:flutter/foundation.dart';
 
+// Firebase configuration for iOS
+const FirebaseOptions iosFirebaseOptions = FirebaseOptions(
+  apiKey: 'AIzaSyC2Rq1Ys0FyYns400rbxw6uv6OGknuBl1o',
+  appId: '1:563333021985:ios:cfbc7b05169928a2a13e60',
+  messagingSenderId: '563333021985',
+  projectId: 'lifeconference-e0add',
+  storageBucket: 'lifeconference-e0add.firebasestorage.app',
+  iosClientId: '563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n.apps.googleusercontent.com',
+  iosBundleId: 'org.lifechangerstouch.lavie',
+);
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  if (Firebase.apps.isEmpty) {
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      await Firebase.initializeApp(options: iosFirebaseOptions);
+    } else {
+      await Firebase.initializeApp(
+        options: const FirebaseOptions(
+          apiKey: 'AIzaSyBOVXFmuHPoxb-P_JuYaGxerieuzlypMdo',
+          appId: '1:563333021985:android:a299708fe90284e7a13e60',
+          messagingSenderId: '563333021985',
+          projectId: 'lifeconference-e0add',
+          storageBucket: 'lifeconference-e0add.firebasestorage.app',
+        ),
+      );
+    }
+  }
   debugPrint("Handling a background message: ${message.messageId}");
 }
 
@@ -29,11 +54,11 @@ void main() async {
   await notificationService.init();
   await notificationService.requestPermissions();
   
-  // Initialize Firebase with platform-specific options (iOS reads GoogleService-Info.plist)
+  // Initialize Firebase with platform-specific options
   try {
     if (Firebase.apps.isEmpty) {
       if (defaultTargetPlatform == TargetPlatform.iOS) {
-        await Firebase.initializeApp();
+        await Firebase.initializeApp(options: iosFirebaseOptions);
       } else {
         await Firebase.initializeApp(
           options: const FirebaseOptions(
@@ -51,6 +76,11 @@ void main() async {
     }
   } catch (e) {
     debugPrint("Firebase init error: $e");
+    try {
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp();
+      }
+    } catch (_) {}
   }
 
   try {
