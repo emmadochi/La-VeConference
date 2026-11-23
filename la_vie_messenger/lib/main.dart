@@ -15,12 +15,24 @@ import 'screens/main_shell.dart';
 import 'widgets/global_active_call_overlay.dart';
 import 'services/active_call_manager.dart';
 
+// Firebase configuration for iOS (lichat-a8f97)
+const FirebaseOptions iosFirebaseOptions = FirebaseOptions(
+  apiKey: 'AIzaSyA99WQqMJ7731JpopMiYUjyHkCiXqexoVE',
+  appId: '1:292411788736:ios:d12d91b8ae43c7e0944c25',
+  messagingSenderId: '292411788736',
+  projectId: 'lichat-a8f97',
+  storageBucket: 'lichat-a8f97.firebasestorage.app',
+  databaseURL: 'https://lichat-a8f97-default-rtdb.firebaseio.com',
+  iosClientId: '292411788736-6fhqa6q7qftimg3q56aspeedvcmu9p0m.apps.googleusercontent.com',
+  iosBundleId: 'org.lifechangerstouch.lavie.messenger',
+);
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     if (Firebase.apps.isEmpty) {
       if (defaultTargetPlatform == TargetPlatform.iOS) {
-        await Firebase.initializeApp();
+        await Firebase.initializeApp(options: iosFirebaseOptions);
       } else {
         await Firebase.initializeApp(
           options: const FirebaseOptions(
@@ -55,11 +67,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase safely (iOS reads GoogleService-Info.plist automatically)
+  // Initialize Firebase safely with platform-specific options
   try {
     if (Firebase.apps.isEmpty) {
       if (defaultTargetPlatform == TargetPlatform.iOS) {
-        await Firebase.initializeApp();
+        await Firebase.initializeApp(options: iosFirebaseOptions);
       } else {
         await Firebase.initializeApp(
           options: const FirebaseOptions(
@@ -94,10 +106,39 @@ void main() async {
   // Initialize Theme Service
   await ThemeService.instance.init();
 
-  // Prevent release mode grey screen on widget build errors
+  // Prevent pitch-black screens on widget build errors by rendering a safe fallback UI
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    debugPrint("Flutter UI error caught safely: ${details.exceptionAsString()}");
-    return const SizedBox.shrink();
+    debugPrint("Flutter UI error caught: ${details.exceptionAsString()}");
+    return Scaffold(
+      backgroundColor: AppTheme.background,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.info_outline, color: AppTheme.mint, size: 48),
+                const SizedBox(height: 16),
+                const Text(
+                  'LiChat Encountered an Error',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  details.exceptionAsString(),
+                  textAlign: TextAlign.center,
+                  maxLines: 5,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   };
 
   runApp(const LiChatApp());
@@ -152,6 +193,9 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (Firebase.apps.isEmpty) {
+      return const WelcomeAuthScreen();
+    }
     return StreamBuilder<User?>(
       initialData: FirebaseAuth.instance.currentUser,
       stream: FirebaseAuth.instance.authStateChanges(),
