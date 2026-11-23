@@ -3,23 +3,23 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>292411788736-6fhqa6q7qftimg3q56aspeedvcmu9p0m.apps.googleusercontent.com</string>
+	<string>563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.292411788736-6fhqa6q7qftimg3q56aspeedvcmu9p0m</string>
+	<string>com.googleusercontent.apps.563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n</string>
 	<key>ANDROID_CLIENT_ID</key>
-	<string>292411788736-nmqbl0b3aldum7u8sp4qkoc804uaje9e.apps.googleusercontent.com</string>
+	<string>563333021985-64nvrh1mvbac09r9eipphve6b2e050dd.apps.googleusercontent.com</string>
 	<key>API_KEY</key>
-	<string>AIzaSyA99WQqMJ7731JpopMiYUjyHkCiXqexoVE</string>
+	<string>AIzaSyC2Rq1Ys0FyYns400rbxw6uv6OGknuBl1o</string>
 	<key>GCM_SENDER_ID</key>
-	<string>292411788736</string>
+	<string>563333021985</string>
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
 	<string>org.lifechangerstouch.lavie.messenger</string>
 	<key>PROJECT_ID</key>
-	<string>lichat-a8f97</string>
+	<string>lifeconference-e0add</string>
 	<key>STORAGE_BUCKET</key>
-	<string>lichat-a8f97.firebasestorage.app</string>
+	<string>lifeconference-e0add.firebasestorage.app</string>
 	<key>IS_ADS_ENABLED</key>
 	<false></false>
 	<key>IS_ANALYTICS_ENABLED</key>
@@ -31,8 +31,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:292411788736:ios:d12d91b8ae43c7e0944c25</string>
-	<key>DATABASE_URL</key>
-	<string>https://lichat-a8f97-default-rtdb.firebaseio.com</string>
+	<string>1:563333021985:ios:cfbc7b05169928a2a13e60</string>
 </dict>
 </plist>

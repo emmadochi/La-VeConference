@@ -757,19 +757,22 @@ class ContactService {
               targetUid:    peerUid,
             );
             final status = result['status'] as String? ?? '';
-            if (status == 'success') {
+            final isSuccess = (result['success'] == true) || status == 'success' || status == 'request_sent';
+            if (isSuccess) {
               return {
                 'success': true,
                 'status': 'request_sent',
                 'peerUid': peerUid,
                 'peerName': peerName,
                 'peerAvatar': peerAvatar,
-                'message': 'Request sent to $peerName! They\'ll be notified.',
+                'message': result['message'] ?? 'Request sent to $peerName! They\'ll be notified.',
               };
             } else if (status == 'already_contacts') {
               return {'success': false, 'status': status, 'message': 'You are already contacts.'};
             } else if (status == 'already_sent') {
               return {'success': false, 'status': status, 'peerName': peerName, 'message': 'Request already pending — waiting for $peerName\'s approval.'};
+            } else {
+              return {...result, 'peerName': peerName};
             }
           }
         }
@@ -809,15 +812,20 @@ class ContactService {
             targetUid:    peerUid,
           );
           final status = result['status'] as String? ?? '';
-          if (status == 'success') {
+          final isSuccess = (result['success'] == true) || status == 'success' || status == 'request_sent';
+          if (isSuccess) {
             return {
               'success': true,
               'status': 'request_sent',
               'peerUid': peerUid,
               'peerName': peerName,
               'peerAvatar': peerAvatar,
-              'message': 'Request sent to $peerName! They\'ll be notified.',
+              'message': result['message'] ?? 'Request sent to $peerName! They\'ll be notified.',
             };
+          } else if (status == 'already_contacts') {
+            return {'success': false, 'status': status, 'message': 'You are already contacts.'};
+          } else if (status == 'already_sent') {
+            return {'success': false, 'status': status, 'peerName': peerName, 'message': 'Request already pending — waiting for $peerName\'s approval.'};
           } else {
             return {...result, 'peerName': peerName};
           }

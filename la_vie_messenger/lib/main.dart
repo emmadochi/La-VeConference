@@ -15,15 +15,14 @@ import 'screens/main_shell.dart';
 import 'widgets/global_active_call_overlay.dart';
 import 'services/active_call_manager.dart';
 
-// Firebase configuration for iOS (lichat-a8f97)
+// Firebase configuration for iOS (lifeconference-e0add - shared with Android & Backend)
 const FirebaseOptions iosFirebaseOptions = FirebaseOptions(
-  apiKey: 'AIzaSyA99WQqMJ7731JpopMiYUjyHkCiXqexoVE',
-  appId: '1:292411788736:ios:d12d91b8ae43c7e0944c25',
-  messagingSenderId: '292411788736',
-  projectId: 'lichat-a8f97',
-  storageBucket: 'lichat-a8f97.firebasestorage.app',
-  databaseURL: 'https://lichat-a8f97-default-rtdb.firebaseio.com',
-  iosClientId: '292411788736-6fhqa6q7qftimg3q56aspeedvcmu9p0m.apps.googleusercontent.com',
+  apiKey: 'AIzaSyC2Rq1Ys0FyYns400rbxw6uv6OGknuBl1o',
+  appId: '1:563333021985:ios:cfbc7b05169928a2a13e60',
+  messagingSenderId: '563333021985',
+  projectId: 'lifeconference-e0add',
+  storageBucket: 'lifeconference-e0add.firebasestorage.app',
+  iosClientId: '563333021985-8aomo76ggc9rf4efgmkib02evia7bd5n.apps.googleusercontent.com',
   iosBundleId: 'org.lifechangerstouch.lavie.messenger',
 );
 
