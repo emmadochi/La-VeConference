@@ -1478,6 +1478,17 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
         else:
             ACTIVE_ROOMS_START[room_id] = room_started_at
 
+    # Fetch participant avatar for LiveKit metadata
+    avatar_url = decoded_token.get("picture") or ""
+    if not avatar_url and db and uid:
+        try:
+            udoc = db.collection("users").document(uid).get()
+            if udoc.exists:
+                ud = udoc.to_dict() or {}
+                avatar_url = ud.get("photoURL") or ud.get("avatar") or ud.get("photoUrl") or ""
+        except Exception:
+            pass
+
     try:
         grant = VideoGrants(
             room_join=True,
@@ -1488,10 +1499,12 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
             room_admin=is_admin
         )
         
+        meta_payload = json.dumps({"avatar": avatar_url, "uid": uid, "name": name})
         token = (
             AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
             .with_identity(peer_id)
             .with_name(name)
+            .with_metadata(meta_payload)
             .with_grants(grant)
             .with_ttl(timedelta(hours=2))
             .to_jwt()

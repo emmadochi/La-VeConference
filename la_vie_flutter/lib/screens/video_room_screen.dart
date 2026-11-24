@@ -102,6 +102,131 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   /// The identity of the participant who is currently the loudest speaker.
   String? _activeSpeakerIdentity;
 
+  final Map<String, String?> _participantAvatarCache = {};
+  final Set<String> _pendingAvatarFetches = {};
+
+  String? _getParticipantAvatar(Participant p) {
+    final identity = p.identity;
+    final isLocal = p == _room.localParticipant;
+    if (isLocal) {
+      final localPhoto = FirebaseAuth.instance.currentUser?.photoURL;
+      if (localPhoto != null && localPhoto.trim().isNotEmpty) return localPhoto.trim();
+    }
+    if (_participantAvatarCache.containsKey(identity)) {
+      return _participantAvatarCache[identity];
+    }
+    final rawMetadata = p.metadata;
+    if (rawMetadata != null && rawMetadata.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawMetadata);
+        if (decoded is Map<String, dynamic>) {
+          final metaAvatar = decoded['avatar'] ?? decoded['photoURL'] ?? decoded['photoUrl'];
+          if (metaAvatar != null && metaAvatar.toString().trim().isNotEmpty) {
+            final validUrl = metaAvatar.toString().trim();
+            _participantAvatarCache[identity] = validUrl;
+            return validUrl;
+          }
+        }
+      } catch (_) {
+        if (rawMetadata.startsWith('http://') || rawMetadata.startsWith('https://')) {
+          final validUrl = rawMetadata.trim();
+          _participantAvatarCache[identity] = validUrl;
+          return validUrl;
+        }
+      }
+    }
+    if (!_pendingAvatarFetches.contains(identity) && identity.isNotEmpty && !identity.startsWith('peer_')) {
+      _pendingAvatarFetches.add(identity);
+      FirebaseFirestore.instance.collection('users').doc(identity).get().then((doc) {
+        if (doc.exists) {
+          final data = doc.data() ?? {};
+          final fsAvatar = (data['photoURL'] ?? data['avatar'] ?? data['photoUrl'])?.toString();
+          if (fsAvatar != null && fsAvatar.trim().isNotEmpty) {
+            _participantAvatarCache[identity] = fsAvatar.trim();
+            if (mounted) setState(() {});
+            return;
+          }
+        }
+        _participantAvatarCache[identity] = null;
+      }).catchError((_) {
+        _participantAvatarCache[identity] = null;
+      });
+    }
+    return null;
+  }
+
+  Widget _buildParticipantAvatarWidget(Participant p, double avatarSize, double fontSize, String initial) {
+    final avatarUrl = _getParticipantAvatar(p);
+    final hasAvatar = avatarUrl != null && avatarUrl.isNotEmpty;
+    return Center(
+      child: Container(
+        width: avatarSize,
+        height: avatarSize,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const LinearGradient(
+            colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF00E5FF).withOpacity(0.35),
+              blurRadius: avatarSize > 70 ? 20 : 12,
+              spreadRadius: avatarSize > 70 ? 2.5 : 1.0,
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(2.5),
+        child: ClipOval(
+          child: Container(
+            color: const Color(0xFF131728),
+            child: hasAvatar
+                ? Image.network(
+                    avatarUrl,
+                    width: avatarSize,
+                    height: avatarSize,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Center(
+                      child: Text(
+                        initial,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: fontSize,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    loadingBuilder: (context, child, progress) {
+                      if (progress == null) return child;
+                      return Center(
+                        child: Text(
+                          initial,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: fontSize,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                : Center(
+                    child: Text(
+                      initial,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
   late EventsListener<RoomEvent> _listener;
   
   final ValueNotifier<List<ChatMessage>> _messagesNotifier = ValueNotifier([]);
@@ -364,6 +489,12 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
               }
             });
           }
+          return;
+        }
+
+        if (event is ParticipantMetadataUpdatedEvent) {
+          _participantAvatarCache.remove(event.participant.identity);
+          if (mounted) setState(() {});
           return;
         }
 
@@ -2737,14 +2868,19 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                                   CircleAvatar(
                                     radius: 20,
                                     backgroundColor: const Color(0xFF5C00FF).withOpacity(0.4),
-                                    child: Text(
-                                      (p.name.isNotEmpty ? p.name[0] : (isLocal ? 'Y' : 'P')).toUpperCase(),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                      ),
-                                    ),
+                                    backgroundImage: (_getParticipantAvatar(p) != null && _getParticipantAvatar(p)!.isNotEmpty)
+                                        ? NetworkImage(_getParticipantAvatar(p)!)
+                                        : null,
+                                    child: (_getParticipantAvatar(p) != null && _getParticipantAvatar(p)!.isNotEmpty)
+                                        ? null
+                                        : Text(
+                                            (p.name.isNotEmpty ? p.name[0] : (isLocal ? 'Y' : 'P')).toUpperCase(),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
                                   ),
                                   if (isHandRaised)
                                     Positioned(
@@ -4911,37 +5047,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
                 child: (isLocal && _isScreenSharing)
                     ? _buildLocalScreenSharePresenterTile(isThumbnail: isThumbnail)
                     : (showAvatar
-                        ? Center(
-                            child: Container(
-                              width: avatarSize,
-                              height: avatarSize,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFF00E5FF).withOpacity(0.3),
-                                    blurRadius: 12,
-                                    spreadRadius: 1,
-                                  ),
-                                ],
-                              ),
-                              child: Center(
-                                child: Text(
-                                  initial,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: fontSize,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          )
+                        ? _buildParticipantAvatarWidget(p, avatarSize, fontSize, initial)
                         : VideoTrackRenderer(track as VideoTrack)),
               ),
 
@@ -5467,22 +5573,7 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
     final initial = p.name.isNotEmpty ? p.name.substring(0, 1).toUpperCase() : 'U';
 
     if (showAvatar) {
-      return Center(
-        child: Container(
-          width: 100,
-          height: 100,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(colors: [Color(0xFF5C00FF), Color(0xFF00E5FF)]),
-            boxShadow: [
-              BoxShadow(color: const Color(0xFF00E5FF).withOpacity(0.3), blurRadius: 20, spreadRadius: 4),
-            ],
-          ),
-          child: Center(
-            child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold)),
-          ),
-        ),
-      );
+      return _buildParticipantAvatarWidget(p, 100.0, 42.0, initial);
     }
     return VideoTrackRenderer(track as VideoTrack);
   }
