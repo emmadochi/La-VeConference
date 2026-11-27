@@ -22,9 +22,15 @@ workflows:
             --create
           keychain add-certificates
           xcode-project use-profiles --export-options-plist=/Users/builder/export_options.plist
+      - name: Disable Swift Package Manager (avoid Firebase binary download timeouts)
+        script: |
+          flutter config --no-enable-swift-package-manager
       - name: Get Flutter dependencies
         script: |
           flutter packages pub get
+      - name: Install CocoaPods
+        script: |
+          cd ios && pod install --repo-update
       - name: Flutter build ipa
         script: |
           flutter build ipa --release \
@@ -67,9 +73,15 @@ workflows:
             --create
           keychain add-certificates
           xcode-project use-profiles --export-options-plist=/Users/builder/export_options.plist
+      - name: Disable Swift Package Manager (avoid Firebase binary download timeouts)
+        script: |
+          flutter config --no-enable-swift-package-manager
       - name: Get Flutter dependencies
         script: |
           flutter packages pub get
+      - name: Install CocoaPods
+        script: |
+          cd ios && pod install --repo-update
       - name: Flutter build ipa
         script: |
           flutter build ipa --release \

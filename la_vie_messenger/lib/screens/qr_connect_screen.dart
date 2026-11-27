@@ -29,6 +29,8 @@ class _QrConnectScreenState extends State<QrConnectScreen> with SingleTickerProv
   MobileScannerController? _scannerController;
   final GlobalKey _qrCardKey = GlobalKey();
   final TextEditingController _codeController = TextEditingController();
+  final TextEditingController _introNoteController = TextEditingController();
+  File? _introPhotoFile;
   String _myLichatCode = '';
   bool _isProcessingScan = false;
   bool _isSharingImage = false;
@@ -113,7 +115,40 @@ class _QrConnectScreenState extends State<QrConnectScreen> with SingleTickerProv
     _tabController.dispose();
     _scannerController?.dispose();
     _codeController.dispose();
+    _introNoteController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickIntroPhoto() async {
+    final picker = ImagePicker();
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: AppTheme.surfaceColor(context),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.photo_camera_rounded, color: AppTheme.mintColor(context)),
+              title: const Text('Take a Photo / Selfie'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: Icon(Icons.photo_library_rounded, color: AppTheme.mintColor(context)),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source != null) {
+      final picked = await picker.pickImage(source: source, imageQuality: 80, maxWidth: 800);
+      if (picked != null && mounted) {
+        setState(() => _introPhotoFile = File(picked.path));
+      }
+    }
   }
 
   Future<void> _connectByCode() async {
@@ -130,11 +165,25 @@ class _QrConnectScreenState extends State<QrConnectScreen> with SingleTickerProv
       _codeError = null;
     });
 
+    String? introPhotoUrl;
+    if (_introPhotoFile != null) {
+      try {
+        introPhotoUrl = await MediaStorageService.uploadProfilePhoto(
+          file: _introPhotoFile!,
+          uid: 'intro_${currentUser.uid}_${DateTime.now().millisecondsSinceEpoch}',
+        );
+      } catch (e) {
+        debugPrint("Could not upload intro photo: $e");
+      }
+    }
+
     final res = await ContactService.pairByUniqueCode(
       myUid: currentUser.uid,
       myName: currentUser.displayName ?? 'LiChat User',
       myAvatar: currentUser.photoURL,
       code: code,
+      introNote: _introNoteController.text.trim(),
+      introPhotoUrl: introPhotoUrl,
     );
 
     if (mounted) {
@@ -142,6 +191,8 @@ class _QrConnectScreenState extends State<QrConnectScreen> with SingleTickerProv
       final status = res['status'] as String? ?? '';
       if (res['success'] == true) {
         _codeController.clear();
+        _introNoteController.clear();
+        setState(() => _introPhotoFile = null);
         widget.onContactAdded?.call();
         if (status == 'request_sent' || status == 'success') {
           _showRequestSentDialog(contactName: res['peerName'] ?? 'Contact');

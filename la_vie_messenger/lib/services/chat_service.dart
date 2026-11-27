@@ -34,6 +34,7 @@ class ChatService {
     Map<String, dynamic>? replyTo,
     Map<String, dynamic>? poll,
     bool isGroup = false,
+    String? groupName,
     List<String>? groupParticipants,
     String? clientTempId,
   }) async {
@@ -172,6 +173,14 @@ class ChatService {
 
         if (recipients.isEmpty) return;
 
+        String resolvedGroupName = groupName ?? '';
+        if (isGroup && resolvedGroupName.isEmpty) {
+          try {
+            final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+            resolvedGroupName = (chatDoc.data()?['groupName'] ?? chatDoc.data()?['name'] ?? 'Group') as String;
+          } catch (_) {}
+        }
+
         await http.post(
           Uri.parse('$_backendUrl/api/chat/notify'),
           headers: {'Content-Type': 'application/json'},
@@ -183,6 +192,8 @@ class ChatService {
             'receiver_ids': recipients,
             'receiver_id': recipients.length == 1 ? recipients.first : null,
             'text': previewText,
+            'is_group': isGroup,
+            'group_name': resolvedGroupName,
           }),
         ).timeout(const Duration(seconds: 5));
       } catch (e) {

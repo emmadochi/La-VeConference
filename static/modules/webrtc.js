@@ -225,8 +225,15 @@ export async function startCall(roomId, options = {}) {
             ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
             : (rawName.length >= 2 ? rawName.substring(0, 2).toUpperCase() : rawName.toUpperCase());
 
+        const localPhoto = (state.userPhoto || (window.auth && window.auth.currentUser && window.auth.currentUser.photoURL) || '').trim();
         const localAvatarLetter = document.getElementById('localAvatarLetter');
-        if (localAvatarLetter) localAvatarLetter.textContent = userInitials;
+        if (localAvatarLetter) {
+            if (localPhoto) {
+                localAvatarLetter.innerHTML = `<img src="${localPhoto}" alt="${rawName}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.parentElement.textContent='${userInitials}';">`;
+            } else {
+                localAvatarLetter.textContent = userInitials;
+            }
+        }
         const localAvatarName = document.getElementById('localAvatarName');
         if (localAvatarName) localAvatarName.textContent = rawName;
         const localLabel = document.getElementById('localLabel');
@@ -858,9 +865,18 @@ export function attachVideoTrack(track, participant, source) {
         const rInitials = rParts.length > 1
             ? (rParts[0][0] + rParts[rParts.length - 1][0]).toUpperCase()
             : (rName.length >= 2 ? rName.substring(0, 2).toUpperCase() : rName.toUpperCase());
+        
+        let pAvatar = '';
+        if (participant.metadata) {
+            try {
+                const meta = JSON.parse(participant.metadata);
+                pAvatar = meta.avatar || meta.photoURL || '';
+            } catch (_) {}
+        }
+
         avatarDiv.innerHTML = `
             <div class="avatar-circle">
-                <span>${rInitials}</span>
+                ${pAvatar ? `<img src="${pAvatar}" alt="${rName}" class="avatar-img" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='block';"><span style="display:none;">${rInitials}</span>` : `<span>${rInitials}</span>`}
                 <div class="avatar-pulse-ring"></div>
             </div>
             <div class="avatar-info-group">

@@ -62,10 +62,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _missedCallSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _unreadChatsSubscription;
   StreamSubscription<List<UserStatusGroup>>? _unreadStatusSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pendingContactRequestsSubscription;
   bool _isIncomingCallShowing = false;
   String? _currentHandledCallId;
   int _unreadMissedCalls = 0;
   int _totalUnreadChats = 0;
+  int _pendingContactRequestsCount = 0;
   bool _hasUnreadStatuses = false;
 
   void _selectChat({
@@ -109,6 +111,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       _startMissedCallTracking(user.uid);
       _startUnreadChatsTracking(user.uid);
       _startUnreadStatusTracking(user.uid);
+      _startPendingContactRequestsTracking(user.uid);
     }
 
     // Setup native channel FIRST so any pending call/chat from a notification
@@ -271,6 +274,23 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     });
   }
 
+  void _startPendingContactRequestsTracking(String myUid) {
+    _pendingContactRequestsSubscription?.cancel();
+    _pendingContactRequestsSubscription = FirebaseFirestore.instance
+        .collection('users')
+        .doc(myUid)
+        .collection('contact_requests')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen((snapshot) {
+      if (mounted) {
+        setState(() => _pendingContactRequestsCount = snapshot.docs.length);
+      }
+    }, onError: (e) {
+      debugPrint("Error tracking pending contact requests: $e");
+    });
+  }
+
   Future<void> _markMissedCallsAsSeen() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -322,6 +342,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _missedCallSubscription?.cancel();
     _unreadChatsSubscription?.cancel();
     _unreadStatusSubscription?.cancel();
+    _pendingContactRequestsSubscription?.cancel();
     super.dispose();
   }
 
@@ -470,6 +491,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     final callerName = data['caller_name'] ?? data['callerName'] ?? 'Contact';
     final callerAvatar = data['caller_avatar'] ?? data['callerAvatar'];
     final isVideo = data['is_video'] == 'true' || data['isVideo'] == 'true' || data['isVideo'] == true;
+    final isGroup = data['is_group'] == 'true' || data['isGroup'] == 'true' || data['isGroup'] == true;
+    final groupName = (data['group_name'] ?? data['groupName'])?.toString();
     final action = data['action'];
 
     // Pre-warm LiveKit token in background so call starts with zero latency
@@ -518,6 +541,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       callerName: callerName.toString(),
       callerAvatar: callerAvatar?.toString(),
       isVideo: isVideo,
+      isGroup: isGroup,
+      groupName: groupName,
     );
   }
 
@@ -655,6 +680,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     required String callerName,
     String? callerAvatar,
     required bool isVideo,
+    bool isGroup = false,
+    String? groupName,
   }) {
     if (_isIncomingCallShowing || _currentHandledCallId == callId || ActiveCallManager.instance.hasActiveCall) return;
     _currentHandledCallId = callId;
@@ -670,6 +697,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           callerName: callerName,
           callerAvatar: callerAvatar,
           isVideo: isVideo,
+          isGroup: isGroup,
+          groupName: groupName,
         ),
       ),
     ).then((_) {
@@ -700,6 +729,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         final callerName = data['callerName'] ?? 'Contact';
         final callerAvatar = data['callerAvatar'];
         final isVideo = data['isVideo'] == true;
+        final isGroup = data['isGroup'] == true || data['is_group'] == true || data['isGroup'] == 'true' || data['is_group'] == 'true';
+        final groupName = (data['groupName'] ?? data['group_name']) as String?;
         final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
 
         // Staleness guard: if call is > 35s old, do not ring!
@@ -715,6 +746,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           callerName: callerName,
           callerAvatar: callerAvatar,
           isVideo: isVideo,
+          isGroup: isGroup,
+          groupName: groupName,
         );
       }
     });
@@ -1429,13 +1462,15 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                             badgeCount: _unreadMissedCalls,
                           ),
 
-                          // 4. Contacts Tab
+                          // 4. Contacts Tab (with live pending requests badge)
                           _buildNavItem(
                             index: 3,
                             icon: _currentIndex == 3
                                 ? Icons.people_alt_rounded
                                 : Icons.people_outline_rounded,
                             tooltip: 'Contacts',
+                            badgeCount: _pendingContactRequestsCount,
+                            badgeColor: mint,
                           ),
 
                           // 5. Profile Tab

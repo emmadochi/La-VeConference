@@ -105,52 +105,110 @@ class _VideoRoomScreenState extends State<VideoRoomScreen> with WidgetsBindingOb
   final Map<String, String?> _participantAvatarCache = {};
   final Set<String> _pendingAvatarFetches = {};
 
+  String? _normalizeAvatarUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    if (trimmed.startsWith('/')) {
+      return '${ApiService.baseUrl}$trimmed';
+    }
+    return '${ApiService.baseUrl}/$trimmed';
+  }
+
   String? _getParticipantAvatar(Participant p) {
     final identity = p.identity;
     final isLocal = p == _room.localParticipant;
     if (isLocal) {
-      final localPhoto = FirebaseAuth.instance.currentUser?.photoURL;
-      if (localPhoto != null && localPhoto.trim().isNotEmpty) return localPhoto.trim();
+      final localPhoto = _normalizeAvatarUrl(FirebaseAuth.instance.currentUser?.photoURL);
+      if (localPhoto != null && localPhoto.isNotEmpty) return localPhoto;
     }
-    if (_participantAvatarCache.containsKey(identity)) {
+
+    if (_participantAvatarCache[identity] != null && _participantAvatarCache[identity]!.isNotEmpty) {
       return _participantAvatarCache[identity];
     }
+
     final rawMetadata = p.metadata;
+    String? metaUid;
     if (rawMetadata != null && rawMetadata.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(rawMetadata);
         if (decoded is Map<String, dynamic>) {
-          final metaAvatar = decoded['avatar'] ?? decoded['photoURL'] ?? decoded['photoUrl'];
-          if (metaAvatar != null && metaAvatar.toString().trim().isNotEmpty) {
-            final validUrl = metaAvatar.toString().trim();
+          metaUid = decoded['uid']?.toString();
+          final metaAvatar = decoded['avatar'] ?? decoded['photoURL'] ?? decoded['photoUrl'] ?? decoded['profileImage'];
+          final validUrl = _normalizeAvatarUrl(metaAvatar?.toString());
+          if (validUrl != null && validUrl.isNotEmpty) {
             _participantAvatarCache[identity] = validUrl;
             return validUrl;
           }
         }
       } catch (_) {
-        if (rawMetadata.startsWith('http://') || rawMetadata.startsWith('https://')) {
-          final validUrl = rawMetadata.trim();
+        final validUrl = _normalizeAvatarUrl(rawMetadata);
+        if (validUrl != null && validUrl.isNotEmpty) {
           _participantAvatarCache[identity] = validUrl;
           return validUrl;
         }
       }
     }
-    if (!_pendingAvatarFetches.contains(identity) && identity.isNotEmpty && !identity.startsWith('peer_')) {
+
+    final targetUid = (metaUid != null && metaUid.isNotEmpty)
+        ? metaUid
+        : (isLocal
+            ? FirebaseAuth.instance.currentUser?.uid
+            : ((identity.isNotEmpty && !identity.startsWith('peer_')) ? identity : null));
+
+    if (!_pendingAvatarFetches.contains(identity)) {
       _pendingAvatarFetches.add(identity);
-      FirebaseFirestore.instance.collection('users').doc(identity).get().then((doc) {
-        if (doc.exists) {
-          final data = doc.data() ?? {};
-          final fsAvatar = (data['photoURL'] ?? data['avatar'] ?? data['photoUrl'])?.toString();
-          if (fsAvatar != null && fsAvatar.trim().isNotEmpty) {
-            _participantAvatarCache[identity] = fsAvatar.trim();
-            if (mounted) setState(() {});
-            return;
+      () async {
+        try {
+          if (targetUid != null && targetUid.isNotEmpty) {
+            final doc = await FirebaseFirestore.instance.collection('users').doc(targetUid).get();
+            if (doc.exists) {
+              final data = doc.data() ?? {};
+              final fsAvatar = _normalizeAvatarUrl((data['photoURL'] ?? data['avatar'] ?? data['photoUrl'] ?? data['profileImage'])?.toString());
+              if (fsAvatar != null && fsAvatar.isNotEmpty) {
+                _participantAvatarCache[identity] = fsAvatar;
+                if (mounted) setState(() {});
+                return;
+              }
+            }
           }
-        }
-        _participantAvatarCache[identity] = null;
-      }).catchError((_) {
-        _participantAvatarCache[identity] = null;
-      });
+
+          final pName = p.name.trim();
+          if (pName.isNotEmpty && pName != 'Guest' && pName != 'User') {
+            final querySnap = await FirebaseFirestore.instance
+                .collection('users')
+                .where('displayName', isEqualTo: pName)
+                .limit(1)
+                .get();
+            if (querySnap.docs.isNotEmpty) {
+              final data = querySnap.docs.first.data();
+              final fsAvatar = _normalizeAvatarUrl((data['photoURL'] ?? data['avatar'] ?? data['photoUrl'] ?? data['profileImage'])?.toString());
+              if (fsAvatar != null && fsAvatar.isNotEmpty) {
+                _participantAvatarCache[identity] = fsAvatar;
+                if (mounted) setState(() {});
+                return;
+              }
+            }
+            final querySnap2 = await FirebaseFirestore.instance
+                .collection('users')
+                .where('name', isEqualTo: pName)
+                .limit(1)
+                .get();
+            if (querySnap2.docs.isNotEmpty) {
+              final data = querySnap2.docs.first.data();
+              final fsAvatar = _normalizeAvatarUrl((data['photoURL'] ?? data['avatar'] ?? data['photoUrl'] ?? data['profileImage'])?.toString());
+              if (fsAvatar != null && fsAvatar.isNotEmpty) {
+                _participantAvatarCache[identity] = fsAvatar;
+                if (mounted) setState(() {});
+                return;
+              }
+            }
+          }
+        } catch (_) {}
+      }();
     }
     return null;
   }

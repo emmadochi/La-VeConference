@@ -29,6 +29,25 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
   String? _myAvatar;
   String _myLichatCode = '';
   late TabController _tabController;
+  final Set<String> _selectedContactUids = {};
+
+  bool get _isSelectionMode => _selectedContactUids.isNotEmpty;
+
+  void _toggleContactSelection(String peerUid) {
+    setState(() {
+      if (_selectedContactUids.contains(peerUid)) {
+        _selectedContactUids.remove(peerUid);
+      } else {
+        _selectedContactUids.add(peerUid);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedContactUids.clear();
+    });
+  }
 
   @override
   void initState() {
@@ -335,6 +354,390 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
     }
   }
 
+  Future<void> _batchDeleteSelectedContacts() async {
+    if (_selectedContactUids.isEmpty || _myUid == null) return;
+    final count = _selectedContactUids.length;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceColor(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: AppTheme.borderColor(context)),
+        ),
+        title: Text(
+          'Delete $count Contact${count > 1 ? 's' : ''}?',
+          style: TextStyle(color: AppTheme.text(context), fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Are you sure you want to remove the selected $count contact${count > 1 ? 's' : ''} from your contact list?',
+          style: TextStyle(color: AppTheme.textSec(context), fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: AppTheme.textSec(context))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final uidsToDelete = _selectedContactUids.toList();
+      _clearSelection();
+
+      for (final uid in uidsToDelete) {
+        await ContactService.deleteContact(_myUid!, uid);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$count contact${count > 1 ? 's' : ''} deleted.'),
+            backgroundColor: AppTheme.surfaceElevatedColor(context),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showVerificationSheet({
+    required BuildContext context,
+    required String senderUid,
+    required String senderName,
+    String? senderAvatar,
+    String? introNote,
+    String? introPhotoUrl,
+  }) {
+    final textController = TextEditingController();
+    final surface = AppTheme.surfaceColor(context);
+    final surfaceElevated = AppTheme.surfaceElevatedColor(context);
+    final border = AppTheme.borderColor(context);
+    final textPrim = AppTheme.text(context);
+    final textSec = AppTheme.textSec(context);
+    final mint = AppTheme.mintColor(context);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              padding: EdgeInsets.only(bottom: bottomInset),
+              child: Column(
+                children: [
+                  // Drag Handle
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(top: 10, bottom: 12),
+                    decoration: BoxDecoration(
+                      color: border,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+
+                  // Header with sender info
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: surfaceElevated,
+                          backgroundImage: MediaStorageService.getAvatarProvider(senderAvatar),
+                          child: (senderAvatar == null || senderAvatar.isEmpty)
+                              ? Text(senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
+                                  style: TextStyle(color: mint, fontWeight: FontWeight.bold))
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(senderName,
+                                  style: TextStyle(color: textPrim, fontWeight: FontWeight.bold, fontSize: 16)),
+                              Text('Identity Verification & Inquiry',
+                                  style: TextStyle(color: mint, fontSize: 12, fontWeight: FontWeight.w500)),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.close_rounded, color: textSec),
+                          onPressed: () => Navigator.pop(sheetCtx),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(color: border, height: 1),
+
+                  // Intro Note & Photo Banner (if attached)
+                  if ((introNote != null && introNote.isNotEmpty) || (introPhotoUrl != null && introPhotoUrl.isNotEmpty))
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: surfaceElevated,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: mint.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (introPhotoUrl != null && introPhotoUrl.isNotEmpty) ...[
+                            GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ImageViewerScreen(
+                                      imageUrl: introPhotoUrl,
+                                      heroTag: 'intro_photo_$senderUid',
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: Hero(
+                                tag: 'intro_photo_$senderUid',
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.network(
+                                    introPhotoUrl,
+                                    width: 55,
+                                    height: 55,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Container(
+                                      width: 55,
+                                      height: 55,
+                                      color: Colors.black26,
+                                      child: const Icon(Icons.broken_image_rounded, size: 20),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                          ],
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.badge_rounded, color: mint, size: 14),
+                                    const SizedBox(width: 5),
+                                    Text('Sender Introduction',
+                                        style: TextStyle(color: mint, fontWeight: FontWeight.bold, fontSize: 12)),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  introNote?.isNotEmpty == true ? introNote! : 'Photo attached for identification.',
+                                  style: TextStyle(color: textPrim, fontSize: 13, height: 1.3),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Real-time Messages Stream
+                  Expanded(
+                    child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: ContactService.streamRequestMessages(targetUid: _myUid!, senderUid: senderUid),
+                      builder: (context, msgSnap) {
+                        final docs = msgSnap.data?.docs ?? [];
+                        if (docs.isEmpty) {
+                          return Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 32),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.chat_outlined, color: textSec.withValues(alpha: 0.5), size: 40),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'No messages yet',
+                                    style: TextStyle(color: textPrim, fontWeight: FontWeight.bold, fontSize: 14),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Ask who they are or clarify their details before accepting.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: textSec, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+
+                        return ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          itemCount: docs.length,
+                          itemBuilder: (context, idx) {
+                            final m = docs[idx].data();
+                            final isMe = m['author_uid'] == _myUid;
+                            final text = m['text'] as String? ?? '';
+                            final authorName = m['author_name'] as String? ?? 'User';
+
+                            return Align(
+                              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                                decoration: BoxDecoration(
+                                  color: isMe ? mint.withValues(alpha: 0.2) : surfaceElevated,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: isMe ? mint.withValues(alpha: 0.4) : border),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      isMe ? 'You' : authorName,
+                                      style: TextStyle(
+                                        color: isMe ? mint : AppTheme.primaryAccent(context),
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(text, style: TextStyle(color: textPrim, fontSize: 13.5)),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+
+                  // Bottom Action Bar: Send Inquiry & Accept/Decline Buttons
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+                    decoration: BoxDecoration(
+                      color: surface,
+                      border: Border(top: BorderSide(color: border)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Message input field
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: surfaceElevated,
+                                  borderRadius: BorderRadius.circular(21),
+                                  border: Border.all(color: border),
+                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 14),
+                                child: TextField(
+                                  controller: textController,
+                                  style: TextStyle(color: textPrim, fontSize: 13.5),
+                                  decoration: InputDecoration(
+                                    hintText: 'Ask: "Who are you?", "Identify yourself"...',
+                                    hintStyle: TextStyle(color: textSec, fontSize: 12.5),
+                                    border: InputBorder.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: Icon(Icons.send_rounded, color: mint),
+                              onPressed: () {
+                                final txt = textController.text.trim();
+                                if (txt.isNotEmpty && _myUid != null) {
+                                  ContactService.sendRequestMessage(
+                                    senderUid: senderUid,
+                                    targetUid: _myUid!,
+                                    authorUid: _myUid!,
+                                    authorName: _myName ?? 'User',
+                                    text: txt,
+                                  );
+                                  textController.clear();
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        // Accept and Decline Buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.redAccent,
+                                  side: const BorderSide(color: Colors.redAccent),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(Icons.close_rounded, size: 16),
+                                label: const Text('Decline'),
+                                onPressed: () {
+                                  Navigator.pop(sheetCtx);
+                                  _respondToRequest(senderUid: senderUid, action: 'decline');
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: mint,
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(Icons.check_rounded, size: 16),
+                                label: const Text('Accept Contact', style: TextStyle(fontWeight: FontWeight.bold)),
+                                onPressed: () {
+                                  Navigator.pop(sheetCtx);
+                                  _respondToRequest(senderUid: senderUid, action: 'accept');
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bg = AppTheme.bg(context);
@@ -356,10 +759,32 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
 
     return Scaffold(
       backgroundColor: bg,
-      appBar: AppBar(
-        backgroundColor: bg,
-        elevation: 0,
-        scrolledUnderElevation: 0,
+      appBar: _isSelectionMode
+          ? AppBar(
+              backgroundColor: surfaceElevated,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.close_rounded),
+                color: textPrim,
+                onPressed: _clearSelection,
+              ),
+              title: Text(
+                '${_selectedContactUids.length} Selected',
+                style: TextStyle(color: textPrim, fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
+                  tooltip: 'Delete Selected',
+                  onPressed: _batchDeleteSelectedContacts,
+                ),
+                const SizedBox(width: 8),
+              ],
+            )
+          : AppBar(
+              backgroundColor: bg,
+              elevation: 0,
+              scrolledUnderElevation: 0,
         title: Builder(
           builder: (ctx) {
             final isDesktop = MediaQuery.of(ctx).size.width >= 800;
@@ -647,13 +1072,19 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
                         final peerUid = contact['uid'] as String? ?? '';
                         final peerName = contact['name'] as String? ?? 'User';
                         final peerAvatar = contact['avatar'] as String?;
+                        final isSelected = _selectedContactUids.contains(peerUid);
 
                         return Container(
                           margin: const EdgeInsets.only(bottom: 8),
                           decoration: BoxDecoration(
-                            color: surface,
+                            color: isSelected
+                                ? mint.withValues(alpha: isDark ? 0.22 : 0.12)
+                                : surface,
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: border.withValues(alpha: 0.7)),
+                            border: Border.all(
+                              color: isSelected ? mint : border.withValues(alpha: 0.7),
+                              width: isSelected ? 1.5 : 1.0,
+                            ),
                             boxShadow: [
                               BoxShadow(
                                 color: Colors.black.withValues(alpha: isDark ? 0.12 : 0.03),
@@ -667,8 +1098,14 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
                             borderRadius: BorderRadius.circular(16),
                             child: InkWell(
                               borderRadius: BorderRadius.circular(16),
-                              onTap: () => _openChat(peerUid: peerUid, peerName: peerName, peerAvatar: peerAvatar),
-                              onLongPress: () => _confirmDeleteContact(context, peerUid, peerName),
+                              onTap: () {
+                                if (_isSelectionMode) {
+                                  _toggleContactSelection(peerUid);
+                                } else {
+                                  _openChat(peerUid: peerUid, peerName: peerName, peerAvatar: peerAvatar);
+                                }
+                              },
+                              onLongPress: () => _toggleContactSelection(peerUid),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                 child: StreamBuilder<UserPresence>(
@@ -743,6 +1180,16 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
                                                   ),
                                                 ),
                                               ),
+                                              if (isSelected)
+                                                Positioned.fill(
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      color: mint,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: const Icon(Icons.check_rounded, color: Colors.black, size: 22),
+                                                  ),
+                                                ),
                                             ],
                                           ),
                                         ),
@@ -991,6 +1438,8 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
                   final senderUid    = req['sender_uid']    as String? ?? '';
                   final senderName   = req['sender_name']   as String? ?? 'LiChat User';
                   final senderAvatar = req['sender_avatar'] as String?;
+                  final introNote    = req['intro_note']    as String?;
+                  final introPhoto   = req['intro_photo_url'] as String?;
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -1007,75 +1456,166 @@ class _ContactsScreenState extends State<ContactsScreen> with SingleTickerProvid
                         ),
                       ],
                     ),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Avatar
-                        Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: mint.withValues(alpha: 0.4), width: 1.5),
-                          ),
-                          child: CircleAvatar(
-                            backgroundColor: surfaceElevated,
-                            backgroundImage: MediaStorageService.getAvatarProvider(senderAvatar),
-                            child: (senderAvatar == null || senderAvatar.isEmpty)
-                                ? Text(
-                                    senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
-                                    style: TextStyle(color: mint, fontWeight: FontWeight.bold, fontSize: 17),
-                                  )
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-
-                        // Name and subtitle
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                senderName,
-                                style: TextStyle(color: textPrim, fontWeight: FontWeight.w700, fontSize: 14.5),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            // Avatar
+                            Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: mint.withValues(alpha: 0.4), width: 1.5),
                               ),
-                              const SizedBox(height: 2),
-                              Row(
+                              child: CircleAvatar(
+                                backgroundColor: surfaceElevated,
+                                backgroundImage: MediaStorageService.getAvatarProvider(senderAvatar),
+                                child: (senderAvatar == null || senderAvatar.isEmpty)
+                                    ? Text(
+                                        senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
+                                        style: TextStyle(color: mint, fontWeight: FontWeight.bold, fontSize: 17),
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+
+                            // Name and subtitle
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Icon(Icons.person_add_rounded, color: mint, size: 12),
-                                  const SizedBox(width: 4),
                                   Text(
-                                    'Wants to connect with you',
-                                    style: TextStyle(color: textSec, fontSize: 11.5),
+                                    senderName,
+                                    style: TextStyle(color: textPrim, fontWeight: FontWeight.w700, fontSize: 14.5),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    children: [
+                                      Icon(Icons.person_add_rounded, color: mint, size: 12),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          'Wants to connect with you',
+                                          style: TextStyle(color: textSec, fontSize: 11.5),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
+                            ),
+                            const SizedBox(width: 6),
+
+                            // Verify & Message button
+                            _RequestActionButton(
+                              label: 'Message',
+                              icon: Icons.chat_bubble_outline_rounded,
+                              color: AppTheme.primaryAccent(context),
+                              onTap: () => _showVerificationSheet(
+                                context: context,
+                                senderUid: senderUid,
+                                senderName: senderName,
+                                senderAvatar: senderAvatar,
+                                introNote: introNote,
+                                introPhotoUrl: introPhoto,
+                              ),
+                              isDark: isDark,
+                              outlined: true,
+                            ),
+                            const SizedBox(width: 5),
+
+                            // Accept button
+                            _RequestActionButton(
+                              label: 'Accept',
+                              icon: Icons.check_rounded,
+                              color: mint,
+                              onTap: () => _respondToRequest(senderUid: senderUid, action: 'accept'),
+                              isDark: isDark,
+                            ),
+                            const SizedBox(width: 5),
+
+                            // Decline button
+                            _RequestActionButton(
+                              label: 'Decline',
+                              icon: Icons.close_rounded,
+                              color: Colors.redAccent,
+                              onTap: () => _respondToRequest(senderUid: senderUid, action: 'decline'),
+                              isDark: isDark,
+                              outlined: true,
+                            ),
+                          ],
+                        ),
+                        if ((introNote != null && introNote.isNotEmpty) || (introPhoto != null && introPhoto.isNotEmpty)) ...[
+                          const SizedBox(height: 10),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => _showVerificationSheet(
+                              context: context,
+                              senderUid: senderUid,
+                              senderName: senderName,
+                              senderAvatar: senderAvatar,
+                              introNote: introNote,
+                              introPhotoUrl: introPhoto,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: surfaceElevated,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: mint.withValues(alpha: 0.2)),
+                              ),
+                              child: Row(
+                                children: [
+                                  if (introPhoto != null && introPhoto.isNotEmpty) ...[
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.network(
+                                        introPhoto,
+                                        width: 44,
+                                        height: 44,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => const Icon(Icons.person_rounded, size: 24),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                  ],
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(Icons.badge_rounded, color: mint, size: 13),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Identity Note (Tap to reply)',
+                                              style: TextStyle(color: mint, fontWeight: FontWeight.bold, fontSize: 11.5),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          introNote?.isNotEmpty == true ? introNote! : 'Photo attached for identification.',
+                                          style: TextStyle(color: textPrim, fontSize: 12.5, fontStyle: FontStyle.italic),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(Icons.chevron_right_rounded, color: textSec, size: 18),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Accept button
-                        _RequestActionButton(
-                          label: 'Accept',
-                          icon: Icons.check_rounded,
-                          color: mint,
-                          onTap: () => _respondToRequest(senderUid: senderUid, action: 'accept'),
-                          isDark: isDark,
-                        ),
-                        const SizedBox(width: 6),
-
-                        // Decline button
-                        _RequestActionButton(
-                          label: 'Decline',
-                          icon: Icons.close_rounded,
-                          color: Colors.redAccent,
-                          onTap: () => _respondToRequest(senderUid: senderUid, action: 'decline'),
-                          isDark: isDark,
-                          outlined: true,
-                        ),
+                        ],
                       ],
                     ),
                   );

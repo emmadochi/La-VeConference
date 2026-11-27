@@ -1489,6 +1489,11 @@ async def get_token(request: Request, room_id: str, peer_id: str, name: str = "A
         except Exception:
             pass
 
+    if avatar_url:
+        avatar_url = str(avatar_url).strip()
+        if avatar_url and not (avatar_url.startswith("http://") or avatar_url.startswith("https://")):
+            avatar_url = f"https://la-vie.lifechangerstouch.org{avatar_url if avatar_url.startswith('/') else '/' + avatar_url}"
+
     try:
         grant = VideoGrants(
             room_join=True,
@@ -4524,6 +4529,8 @@ async def notify_chat_message(request: Request):
         single_receiver = data.get("receiver_id") or data.get("receiverId")
         batch_receivers = data.get("receiver_ids") or data.get("receiverIds") or data.get("recipients") or []
         text = data.get("text") or "New message"
+        is_group = bool(data.get("is_group", False) or data.get("isGroup", False))
+        group_name = (data.get("group_name") or data.get("groupName") or "").strip()
 
         # Normalize receivers list
         receivers = []
@@ -4549,6 +4556,13 @@ async def notify_chat_message(request: Request):
         if not fcm_tokens:
             return {"status": "skipped", "message": "No FCM tokens found"}
 
+        if is_group and group_name:
+            notif_title = str(group_name)
+            notif_body = f"{sender_name}: {text}"
+        else:
+            notif_title = str(sender_name)
+            notif_body = str(text)
+
         data_payload = {
             "type": "chat_message",
             "chat_id": str(chat_id),
@@ -4562,20 +4576,28 @@ async def notify_chat_message(request: Request):
             "sender_avatar": str(sender_avatar or ""),
             "senderAvatar": str(sender_avatar or ""),
             "text": str(text),
+            "is_group": str(is_group).lower(),
+            "isGroup": str(is_group).lower(),
+            "group_name": str(group_name),
+            "groupName": str(group_name),
             "click_action": "FLUTTER_NOTIFICATION_CLICK",
         }
 
         android_config = messaging.AndroidConfig(priority="high")
         apns_config = messaging.APNSConfig(
-            headers={"apns-priority": "10"},
+            headers={
+                "apns-priority": "10",
+                "apns-collapse-id": str(chat_id) if is_group else str(sender_id),
+            },
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     alert=messaging.ApsAlert(
-                        title=str(sender_name),
-                        body=str(text),
+                        title=notif_title,
+                        body=notif_body,
                     ),
                     sound="default",
                     badge=1,
+                    thread_id=str(chat_id),
                 ),
             ),
         )
@@ -4698,6 +4720,8 @@ async def send_contact_request(request: Request):
     sender_name  = (data.get("sender_name")  or "LiChat User").strip()
     sender_avatar = data.get("sender_avatar") or ""
     target_uid   = (data.get("target_uid")   or "").strip()
+    intro_note   = (data.get("intro_note")   or data.get("introNote") or "").strip()
+    intro_photo_url = (data.get("intro_photo_url") or data.get("introPhotoUrl") or "").strip()
 
     if not sender_uid or not target_uid or sender_uid == target_uid:
         raise HTTPException(status_code=400, detail="Valid sender_uid and target_uid required")
@@ -4717,48 +4741,163 @@ async def send_contact_request(request: Request):
         return {"status": "already_sent", "message": "Request already pending."}
 
     # Write pending request doc on the TARGET user's side
+    req_payload = {
+        "sender_uid":    sender_uid,
+        "sender_name":   sender_name,
+        "sender_avatar": sender_avatar,
+        "status":        "pending",
+        "createdAt":     now,
+    }
+    if intro_note:
+        req_payload["intro_note"] = intro_note
+    if intro_photo_url:
+        req_payload["intro_photo_url"] = intro_photo_url
+
     db.collection("users").document(target_uid) \
-        .collection("contact_requests").document(sender_uid).set({
-            "sender_uid":    sender_uid,
-            "sender_name":   sender_name,
-            "sender_avatar": sender_avatar,
-            "status":        "pending",
-            "createdAt":     now,
-        })
+        .collection("contact_requests").document(sender_uid).set(req_payload)
 
     # Also track outgoing request on the sender's side (for dedup UI)
-    db.collection("users").document(sender_uid) \
-        .collection("outgoing_requests").document(target_uid).set({
-            "target_uid": target_uid,
-            "status":     "pending",
-            "createdAt":  now,
-        })
+    out_payload = {
+        "target_uid": target_uid,
+        "status":     "pending",
+        "createdAt":  now,
+    }
+    if intro_note:
+        out_payload["intro_note"] = intro_note
+    if intro_photo_url:
+        out_payload["intro_photo_url"] = intro_photo_url
 
-    # Push notification to target
+    db.collection("users").document(sender_uid) \
+        .collection("outgoing_requests").document(target_uid).set(out_payload)
+
+    # Push notification to target (Android high priority + iOS APNS alert & badge)
     try:
         target_doc = db.collection("users").document(target_uid).get()
         if target_doc.exists:
             td = target_doc.to_dict() or {}
             fcm_token = td.get("fcm_token") or td.get("fcmToken")
             if fcm_token:
+                notif_body = f"{sender_name}: \"{intro_note}\"" if intro_note else f"{sender_name} wants to connect with you."
                 messaging.send(messaging.Message(
                     data={
-                        "type":          "contact_request",
-                        "sender_id":     sender_uid,
-                        "sender_name":   sender_name,
-                        "sender_avatar": sender_avatar,
+                        "type":            "contact_request",
+                        "sender_id":       sender_uid,
+                        "senderId":        sender_uid,
+                        "sender_name":     sender_name,
+                        "senderName":      sender_name,
+                        "sender_avatar":   sender_avatar,
+                        "intro_note":      intro_note,
+                        "intro_photo_url": intro_photo_url,
+                        "click_action":    "FLUTTER_NOTIFICATION_CLICK",
                     },
                     notification=messaging.Notification(
                         title="New Contact Request on LiChat 👋",
-                        body=f"{sender_name} wants to connect with you.",
+                        body=notif_body,
                     ),
                     android=messaging.AndroidConfig(priority="high"),
+                    apns=messaging.APNSConfig(
+                        headers={"apns-priority": "10"},
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(
+                                alert=messaging.ApsAlert(
+                                    title="New Contact Request on LiChat 👋",
+                                    body=notif_body,
+                                ),
+                                sound="default",
+                                badge=1,
+                            ),
+                        ),
+                    ),
                     token=fcm_token,
                 ))
     except Exception as ne:
         logger.warning(f"Could not send contact request push: {ne}")
 
     return {"status": "success", "message": "Contact request sent."}
+
+
+@app.post("/api/contacts/request/message")
+async def send_contact_request_message(request: Request):
+    """
+    Sends a pre-acceptance clarification message between the requester and recipient.
+    Allows mutual identification before the recipient accepts or declines the contact.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database uninitialized")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    sender_uid  = (data.get("sender_uid")  or "").strip()
+    target_uid  = (data.get("target_uid")  or "").strip()
+    author_uid  = (data.get("author_uid")  or sender_uid).strip()
+    author_name = (data.get("author_name") or "User").strip()
+    text        = (data.get("text")        or "").strip()
+
+    if not sender_uid or not target_uid or not text:
+        raise HTTPException(status_code=400, detail="sender_uid, target_uid, and text are required")
+
+    now = datetime.now(timezone.utc)
+
+    # The request is keyed as sender_uid inside users/{target_uid}/contact_requests/
+    msg_data = {
+        "author_uid":  author_uid,
+        "author_name": author_name,
+        "text":        text,
+        "createdAt":   now,
+    }
+
+    # Store under target's contact request messages
+    db.collection("users").document(target_uid) \
+        .collection("contact_requests").document(sender_uid) \
+        .collection("messages").add(msg_data)
+
+    # Determine who gets the push notification (the other party)
+    recipient_uid = sender_uid if author_uid == target_uid else target_uid
+
+    try:
+        recip_doc = db.collection("users").document(recipient_uid).get()
+        if recip_doc.exists:
+            rd = recip_doc.to_dict() or {}
+            fcm_token = rd.get("fcm_token") or rd.get("fcmToken")
+            if fcm_token:
+                notif_title = f"{author_name} (Verification)"
+                notif_body = text
+                messaging.send(messaging.Message(
+                    data={
+                        "type":         "contact_request_message",
+                        "sender_uid":   sender_uid,
+                        "target_uid":   target_uid,
+                        "author_uid":   author_uid,
+                        "author_name":  author_name,
+                        "text":         text,
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                    },
+                    notification=messaging.Notification(
+                        title=notif_title,
+                        body=notif_body,
+                    ),
+                    android=messaging.AndroidConfig(priority="high"),
+                    apns=messaging.APNSConfig(
+                        headers={"apns-priority": "10"},
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(
+                                alert=messaging.ApsAlert(
+                                    title=notif_title,
+                                    body=notif_body,
+                                ),
+                                sound="default",
+                                badge=1,
+                            ),
+                        ),
+                    ),
+                    token=fcm_token,
+                ))
+    except Exception as e:
+        logger.warning(f"Could not dispatch request clarification push: {e}")
+
+    return {"status": "success", "message": "Verification message sent."}
 
 
 @app.post("/api/contacts/request/respond")

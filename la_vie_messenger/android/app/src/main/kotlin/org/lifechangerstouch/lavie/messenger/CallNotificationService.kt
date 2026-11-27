@@ -211,6 +211,10 @@ class CallNotificationService : FirebaseMessagingService() {
         val senderName = data["sender_name"] ?: data["senderName"] ?: notification?.title ?: "New Message"
         val senderAvatar = data["sender_avatar"] ?: data["senderAvatar"] ?: ""
         val text = data["text"] ?: notification?.body ?: "You have a new message"
+        val isGroup = data["is_group"] == "true" || data["isGroup"] == "true"
+        val groupName = data["group_name"] ?: data["groupName"] ?: ""
+        val notifTitle = if (isGroup && groupName.isNotEmpty()) groupName else senderName
+        val notifContent = if (isGroup && groupName.isNotEmpty()) "$senderName: $text" else text
 
         // Immediate background delivery receipt ACK (WhatsApp-style double tick)
         if (chatId.isNotEmpty()) {
@@ -271,8 +275,9 @@ class CallNotificationService : FirebaseMessagingService() {
         )
 
         // RemoteInput for direct inline reply from notification bar
+        val replyLabel = if (isGroup && groupName.isNotEmpty()) "Reply to $groupName..." else "Reply to $senderName..."
         val remoteInput = androidx.core.app.RemoteInput.Builder(ChatActionReceiver.KEY_TEXT_REPLY)
-            .setLabel("Reply to $senderName...")
+            .setLabel(replyLabel)
             .build()
 
         val replyIntent = Intent(this, ChatActionReceiver::class.java).apply {
@@ -322,8 +327,8 @@ class CallNotificationService : FirebaseMessagingService() {
                 }
             }
             .setColor(0xFF7C3AED.toInt())
-            .setContentTitle(senderName)
-            .setContentText(text)
+            .setContentTitle(notifTitle)
+            .setContentText(notifContent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)

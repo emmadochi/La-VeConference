@@ -72,6 +72,8 @@ class ContactService {
     required String senderName,
     String? senderAvatar,
     required String targetUid,
+    String? introNote,
+    String? introPhotoUrl,
   }) async {
     if (senderUid == targetUid) {
       return {'success': false, 'status': 'self', 'message': 'You cannot add yourself.'};
@@ -90,25 +92,41 @@ class ContactService {
 
     // 2. Direct Firestore write: write to target's pending requests and sender's outgoing
     try {
+      final targetPayload = <String, dynamic>{
+        'sender_uid':    senderUid,
+        'sender_name':   senderName,
+        'sender_avatar': senderAvatar ?? '',
+        'status':        'pending',
+        'createdAt':     FieldValue.serverTimestamp(),
+      };
+      if (introNote != null && introNote.trim().isNotEmpty) {
+        targetPayload['intro_note'] = introNote.trim();
+      }
+      if (introPhotoUrl != null && introPhotoUrl.trim().isNotEmpty) {
+        targetPayload['intro_photo_url'] = introPhotoUrl.trim();
+      }
+
       await _firestore
           .collection('users').doc(targetUid)
           .collection('contact_requests').doc(senderUid)
-          .set({
-            'sender_uid':    senderUid,
-            'sender_name':   senderName,
-            'sender_avatar': senderAvatar ?? '',
-            'status':        'pending',
-            'createdAt':     FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          .set(targetPayload, SetOptions(merge: true));
+
+      final senderPayload = <String, dynamic>{
+        'target_uid': targetUid,
+        'status':     'pending',
+        'createdAt':  FieldValue.serverTimestamp(),
+      };
+      if (introNote != null && introNote.trim().isNotEmpty) {
+        senderPayload['intro_note'] = introNote.trim();
+      }
+      if (introPhotoUrl != null && introPhotoUrl.trim().isNotEmpty) {
+        senderPayload['intro_photo_url'] = introPhotoUrl.trim();
+      }
 
       await _firestore
           .collection('users').doc(senderUid)
           .collection('outgoing_requests').doc(targetUid)
-          .set({
-            'target_uid': targetUid,
-            'status':     'pending',
-            'createdAt':  FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          .set(senderPayload, SetOptions(merge: true));
     } catch (fe) {
       debugPrint("Direct Firestore request write error: $fe");
     }
@@ -119,10 +137,12 @@ class ContactService {
         Uri.parse('$_backendUrl/api/contacts/request'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'sender_uid':    senderUid,
-          'sender_name':   senderName,
-          'sender_avatar': senderAvatar ?? '',
-          'target_uid':    targetUid,
+          'sender_uid':       senderUid,
+          'sender_name':      senderName,
+          'sender_avatar':    senderAvatar ?? '',
+          'target_uid':       targetUid,
+          'intro_note':       introNote ?? '',
+          'intro_photo_url':  introPhotoUrl ?? '',
         }),
       ).timeout(const Duration(seconds: 8)).catchError((e) {
         debugPrint("sendContactRequest push timeout: $e");
@@ -137,6 +157,64 @@ class ContactService {
       'status': 'request_sent',
       'message': 'Contact request sent! They will be notified.',
     };
+  }
+
+  /// Sends a pre-acceptance clarification or verification message
+  static Future<void> sendRequestMessage({
+    required String senderUid,
+    required String targetUid,
+    required String authorUid,
+    required String authorName,
+    required String text,
+  }) async {
+    final cleanText = text.trim();
+    if (cleanText.isEmpty) return;
+
+    try {
+      await _firestore
+          .collection('users')
+          .doc(targetUid)
+          .collection('contact_requests')
+          .doc(senderUid)
+          .collection('messages')
+          .add({
+        'author_uid': authorUid,
+        'author_name': authorName,
+        'text': cleanText,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint("Error writing request message: $e");
+    }
+
+    try {
+      http.post(
+        Uri.parse('$_backendUrl/api/contacts/request/message'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'sender_uid': senderUid,
+          'target_uid': targetUid,
+          'author_uid': authorUid,
+          'author_name': authorName,
+          'text': cleanText,
+        }),
+      ).timeout(const Duration(seconds: 6)).catchError((_) => http.Response('{}', 200));
+    } catch (_) {}
+  }
+
+  /// Real-time stream of pre-acceptance messages between requester and target
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamRequestMessages({
+    required String targetUid,
+    required String senderUid,
+  }) {
+    return _firestore
+        .collection('users')
+        .doc(targetUid)
+        .collection('contact_requests')
+        .doc(senderUid)
+        .collection('messages')
+        .orderBy('createdAt', descending: false)
+        .snapshots();
   }
 
   /// Accept or decline an incoming contact request.
@@ -724,6 +802,8 @@ class ContactService {
     required String myName,
     String? myAvatar,
     required String code,
+    String? introNote,
+    String? introPhotoUrl,
   }) async {
     final cleanCode = code.trim().toUpperCase().replaceAll('@', '').replaceAll('#', '');
     if (cleanCode.isEmpty) {
@@ -751,10 +831,12 @@ class ContactService {
             final peerAvatar = user['avatar'] ?? '';
 
             final result = await sendContactRequest(
-              senderUid:    myUid,
-              senderName:   myName,
-              senderAvatar: myAvatar,
-              targetUid:    peerUid,
+              senderUid:       myUid,
+              senderName:      myName,
+              senderAvatar:    myAvatar,
+              targetUid:       peerUid,
+              introNote:       introNote,
+              introPhotoUrl:   introPhotoUrl,
             );
             final status = result['status'] as String? ?? '';
             final isSuccess = (result['success'] == true) || status == 'success' || status == 'request_sent';
@@ -806,10 +888,12 @@ class ContactService {
           final peerAvatar = udata['photoURL'] ?? udata['photoUrl'] ?? udata['avatar'] ?? '';
 
           final result = await sendContactRequest(
-            senderUid:    myUid,
-            senderName:   myName,
-            senderAvatar: myAvatar,
-            targetUid:    peerUid,
+            senderUid:       myUid,
+            senderName:      myName,
+            senderAvatar:    myAvatar,
+            targetUid:       peerUid,
+            introNote:       introNote,
+            introPhotoUrl:   introPhotoUrl,
           );
           final status = result['status'] as String? ?? '';
           final isSuccess = (result['success'] == true) || status == 'success' || status == 'request_sent';

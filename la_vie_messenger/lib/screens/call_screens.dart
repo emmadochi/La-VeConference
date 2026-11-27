@@ -483,6 +483,8 @@ class IncomingCallScreen extends StatefulWidget {
   final String? callerAvatar;
   final bool isVideo;
   final String? roomName;
+  final bool isGroup;
+  final String? groupName;
 
   const IncomingCallScreen({
     Key? key,
@@ -491,6 +493,8 @@ class IncomingCallScreen extends StatefulWidget {
     this.callerAvatar,
     required this.isVideo,
     this.roomName,
+    this.isGroup = false,
+    this.groupName,
   }) : super(key: key);
 
   @override
@@ -618,23 +622,27 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
-                    color: mint.withValues(alpha: 0.15),
+                    color: (widget.isGroup ? AppTheme.primaryAccent(context) : mint).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: mint.withValues(alpha: 0.35)),
+                    border: Border.all(color: (widget.isGroup ? AppTheme.primaryAccent(context) : mint).withValues(alpha: 0.35)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        widget.isVideo ? Icons.videocam_rounded : Icons.phone_in_talk_rounded,
-                        color: mint,
+                        widget.isGroup
+                            ? Icons.groups_rounded
+                            : (widget.isVideo ? Icons.videocam_rounded : Icons.phone_in_talk_rounded),
+                        color: widget.isGroup ? AppTheme.primaryAccent(context) : mint,
                         size: 18,
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        widget.isVideo ? 'LiChat HD Video Call' : 'LiChat HD Voice Call',
+                        widget.isGroup
+                            ? (widget.isVideo ? 'LiChat Group Video Call 👥' : 'LiChat Group Voice Call 👥')
+                            : (widget.isVideo ? 'LiChat HD Video Call' : 'LiChat HD Voice Call'),
                         style: TextStyle(
-                          color: mint,
+                          color: widget.isGroup ? AppTheme.primaryAccent(context) : mint,
                           fontSize: 13.5,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 0.3,
@@ -646,17 +654,19 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
 
                 const SizedBox(height: 20),
 
-                // Caller Display Name
+                // Main Title (Group Name if group call, or Caller Name if 1-on-1)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Text(
-                    widget.callerName,
+                    (widget.isGroup && widget.groupName != null && widget.groupName!.isNotEmpty)
+                        ? widget.groupName!
+                        : widget.callerName,
                     textAlign: TextAlign.center,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 30,
+                      fontSize: 28,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 0.2,
                     ),
@@ -665,13 +675,15 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
 
                 const SizedBox(height: 8),
 
-                // Status Subtitle
-                const Text(
-                  'Incoming Call...',
+                // Status Subtitle (Attribution to caller if group call)
+                Text(
+                  (widget.isGroup && widget.groupName != null && widget.groupName!.isNotEmpty)
+                      ? '${widget.callerName} is calling the group...'
+                      : 'Incoming Call...',
                   style: TextStyle(
-                    color: Color(0xFFB3ABD0),
+                    color: widget.isGroup ? mint : const Color(0xFFB3ABD0),
                     fontSize: 15,
-                    fontWeight: FontWeight.normal,
+                    fontWeight: widget.isGroup ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
 
